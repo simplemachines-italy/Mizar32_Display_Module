@@ -1,0 +1,12 @@
+This is the code that runs on the PIC16F84 on the Mizar32 LCD module.
+
+To assemble it (on Debian/Ubuntu):
+
+Install the PIC assembler and PIC programmer:
+    sudo apt-get install gputils picprog
+
+Assemble the .asm to a .hex
+    gpasm Display_module.asm
+
+Program it to the board over a serial PIC programmer:
+    picprog --device pic16f84a --burn --input Display_module.hex

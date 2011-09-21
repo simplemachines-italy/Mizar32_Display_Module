@@ -14,8 +14,8 @@ all: $(ALL)
 	gpasm $<
 
 # Program the hex file to the board
-program:
-	picprog --device pic16f84a --burn --input Display_module.hex
+program: $(ALL)
+	picprog --device pic16f84a --burn --input $(ALL)
 
 # Rule to remove automatically-created files
 clean:

@@ -18,8 +18,8 @@ STATUS_BNK_1	equ	0x83
 ;Linee di controllo dell'LCD
 
 LCD_RS          equ     2       ;Register Select on portb
-LCD_E           equ     4       ;Lcd Enable on port portb
 LCD_RW          equ     3       ;Read o write selection on portb
+LCD_E           equ     4       ;Lcd Enable on port portb
 
 ;LCD data line bus
 
@@ -51,7 +51,7 @@ I2CTRIS	equ	TRISB
 ;Used PIC memory ORG 0x0C
 
 tmpLcdRegister	equ	0x0c	;Two locations reserved for LCD register
-msDelayCounter	equ	0x0e   ;Two locations reserved for delay register
+DelayCounter	equ	0x0e   ;Two locations reserved for delay register
 general		equ	0x10	;general pourpose register
 time_out		equ	0x11	;Counter register for time out i2c comunications
 
@@ -596,26 +596,72 @@ init_interrupt
 	return
 
 ;**********************************************************************
-; Routine di ritardo
+; Delay routines
 ;
 ; W = Ritardo richiesto in ms (con quarzo a 4MHz)
 ;**********************************************************************
 
+; Fosc = 3.6864MHz; instruction time = 4 clock cycles => 921600 instructions/sec
+; 1ms = 921.6 insns = 921.6/4 inner loops = 230.4  An extra 4 cycles are taken
+; by the outer loop re-initialization, giving barely over 1ms
+
 msDelay
-                movwf   msDelayCounter+1
-                clrf    msDelayCounter+0
+                movwf   DelayCounter+1	; Number of milliseconds
+		movlw	.230		; inner loop cycles for one ms
 
-                ; Loop interno da circa 1 ms
-msDelayLoop
-                nop
-                decfsz  msDelayCounter+0,F
-                goto    msDelayLoop
-                nop
+msDelayLoop1	movwf	DelayCounter+0	; 1 insn
+                ; Internal loop takes one millisecond
+msDelayLoop2
+                nop				; 1 insn
+                decfsz  DelayCounter+0,F	; 1 insn
+                goto    msDelayLoop2		; 2 insn
 
-                decfsz  msDelayCounter+1,F
-                goto    msDelayLoop
+                decfsz  DelayCounter+1,F	; 1 insn
+                goto    msDelayLoop1		; 2 insn
 
                 return
+
+; Delay for 39 microseconds.
+; 921600 * 0.000039 = 35.9 instructions.
+; Overhead: CALL (2), MOVLW(1), MOVWF(1), return(2) = 6 insns. 30/3 = 10
+Delay39us
+		movlw	.10
+		movwf	DelayCounter
+Delay39usLoop
+		decfsz	DelayCounter		; 1 cycle
+                goto    Delay39usLoop		; 2 cycles
+		
+		return
+
+
+; Delay for 43 microseconds.
+; 921600 * 0.000043 = 39.6288 instructions.
+; Overhead: CALL (2), NOP(1) MOVLW(1), MOVWF(1), return(2) = 7 insns. 33/3 = 11
+Delay43us
+		nop
+		movlw	.11
+		movwf	DelayCounter
+Delay43usLoop
+		decfsz	DelayCounter		; 1 cycle
+                goto    Delay43usLoop		; 2 cycles
+		
+		return
+
+
+; Delay for 1.53 milliseconds.
+; 921600 * 0.00153 = 1410.048 insns
+; 1410/6 = 235.0, with overhead of 6 cycles, we use 234
+Delay1_53ms
+		movlw	.234
+		movwf	DelayCounter
+Delay1_53usLoop
+		goto	$+1			; 2 cycles
+		nop				; 1 cycle
+		decfsz	DelayCounter		; 1 cycle
+                goto    Delay1_53usLoop		; 2 cycles
+		
+		return
+		
 
 ;**********************************************************************
 ; Inizializza il display LCD
@@ -628,7 +674,7 @@ LcdInit
                 bcf     PORTB,LCD_RS    ;Mette l'LCD in modo comando
                 bcf     PORTB,LCD_RW    ;abilita modo scrittura sull'LCD
 
-                movlw   250
+                movlw   30
                 call    msDelay
 
                 ; Invia all'LCD la sequenza di reset
@@ -639,19 +685,13 @@ LcdInit
                 bcf     PORTA,LCD_DB7
 
                 EN_STROBE
-
-                movlw   2
-                call    msDelay
+                call    Delay39us
 
                 EN_STROBE
-
-                movlw   2
-                call    msDelay
+                call    Delay39us
 
                 EN_STROBE
-
-                movlw   2
-                call    msDelay
+                call    Delay39us
 
 ;--------------------------------
 
@@ -661,27 +701,24 @@ LcdInit
                 bcf     PORTA,LCD_DB7
 
                 EN_STROBE
-
-                movlw   2
-                call    msDelay
+                call    Delay39us
 
                 ;Configura il bus dati a 4 bit
 
                 movlw   0x28
-                ;movlw   0x2C
                 call    LcdSendCommand
 
                 ;Entry mode set, increment, no shift
 
                 movlw   0x06
-                ;movlw   0x09
                 call    LcdSendCommand
 
                 ;Display ON, Curson OFF, Blink OFF
 
                 movlw   0x0C
-                ;movlw   0x07
                 call    LcdSendCommand
+
+		; Clear display
 
                 movlw   0x01
                 call    LcdSendCommand
@@ -695,17 +732,7 @@ LcdInit
 
 LcdClear
                 movlw   0x01
-                call    LcdSendCommand
-
-                movlw   2
-                call    msDelay
-
-                ;DD RAM address set 1st digit
-
-;               movlw   0x80
-;               call    LcdSendCommand
-
-                return
+                goto    LcdSendCommand	; tail call
 
 ;**********************************************************************
 ; Locate cursor on LCD
@@ -732,22 +759,33 @@ LcdLocate
 
 
 ;**********************************************************************
-; Send a data to LCD
-;**********************************************************************
-
-LcdSendData
-
-	bsf	PORTB,LCD_RS
-	goto	LcdSendByte
-
-;**********************************************************************
 ; Send a command to LCD
 ;**********************************************************************
 
 LcdSendCommand
-	
-	bcf	PORTB,LCD_RS
-	goto	LcdSendByte
+
+		bcf	PORTB,LCD_RS
+		call	LcdSendByte
+
+		; 1.53ms delay is necessary for commands (0), 1, 2 and 3
+		; 39us delay is necessary for all the other commands
+		movf	tmpLcdRegister,w; Recover value of w (the command)
+		andlw	1111111100B	; Sets Z if command was 0 to 3
+		movlw	2		; Set delay: does not affect Z
+		btfsc	STATUS,Z	; Long delay if Z is set
+		goto    Delay1_53ms	; tail call to long delay
+		goto    Delay39us	; tail call to short delay
+
+;**********************************************************************
+; Send a datum to the LCD
+;**********************************************************************
+
+LcdSendData
+
+		bsf	PORTB,LCD_RS
+		call	LcdSendByte
+		; 43us delay is necessary when writing data
+		goto	Delay43us	; tail call
 
 ;**********************************************************************
 ; Send a byte to LCD by 4 bit data bus
@@ -755,50 +793,17 @@ LcdSendCommand
 
 LcdSendByte
                 ;Save value to send
-
                 movwf   tmpLcdRegister
 
-                ;Invia i quattro bit piu' significativi
-
-                bcf     PORTA,LCD_DB4
-                bcf     PORTA,LCD_DB5
-                bcf     PORTA,LCD_DB6
-                bcf     PORTA,LCD_DB7
-
-                btfsc   tmpLcdRegister,4
-                bsf     PORTA,LCD_DB4
-                btfsc   tmpLcdRegister,5
-                bsf     PORTA,LCD_DB5
-                btfsc   tmpLcdRegister,6
-                bsf     PORTA,LCD_DB6
-                btfsc   tmpLcdRegister,7
-                bsf     PORTA,LCD_DB7
-
+                ; Send the four most significant bits
+		swapf	tmpLcdRegister,w
+		movwf	PORTA
                 EN_STROBE
 
-                movlw   2
-                call    msDelay
-
-                ;Send lower four bits
-
-                bcf     PORTA,LCD_DB4
-                bcf     PORTA,LCD_DB5
-                bcf     PORTA,LCD_DB6
-                bcf     PORTA,LCD_DB7
-
-                btfsc   tmpLcdRegister,0
-                bsf     PORTA,LCD_DB4
-                btfsc   tmpLcdRegister,1
-                bsf     PORTA,LCD_DB5
-                btfsc   tmpLcdRegister,2
-                bsf     PORTA,LCD_DB6
-                btfsc   tmpLcdRegister,3
-                bsf     PORTA,LCD_DB7
-
+		; Send the four least significant bits
+		movf	tmpLcdRegister,w
+		movwf	PORTA
                 EN_STROBE
-
-                movlw   2
-                call    msDelay
 
                 return
 ;**********************************************************************

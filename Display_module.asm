@@ -74,39 +74,22 @@ I2CTRIS       equ    TRISB
 ;Used PIC memory ORG 0x0C
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
-DelayCounter  equ    0x0e   ;Two locations reserved for delay register
-general              equ    0x10   ;general pourpose register
-time_out             equ    0x11   ;Counter register for time out i2c comunications
+DelayCounter         equ    0x0e   ;Two locations reserved for delay register
+time_out             equ    0x10   ;Counter for time out in I2C communication
 
-flag                 equ    0x12   ;|Register used for flag bit allocation
-;Initializes bit-flag in register-flag-----------------------------------------------------|
-button               equ    0      ;|0 = no event on switch - 1 = event on switch          |
-switch_bit           equ    1      ;|0 = do not send the value of switch down on i2c       |
-                                   ;|1 = send the value of switch down on i2c              |
-read                 equ    2      ;|1 = read in master operation                          |                           
-write                equ    2      ;|0 = write in master operation                         |
-istr_lcd             equ    3      ;|0 = instruction to send to display                    |
-data_lcd             equ    3      ;|1 = data to send to dislpay                           |
-intflag              equ    4      ;|0 = no interrupt occurred 1 = interrupt occurred      |
-avr32                equ    5      ;|0 = send i2c word to eeprom 1 =send i2c word to avr32 |
-;------------------------------------------------------------------------------------------|
+flag                 equ    0x11   ;Register used for flag bit allocation
 
-i2c_data             equ    0x13   ;Save location for i2c data byte.
-i2c_bit              equ    0x14   ;bit counter in i2c byte transfert
-addr                 equ    0x15   ;address to write or to read in i2c operation
-addr_slave           equ    0x16   ;the phisical address to identify the slave
-nb_data              equ    0x17   ;data number's to write (o read) in I2C operation
-switch               equ    0x18   ;here are saved the last switch pressed
-lcd_addr_count       equ    0x19   ;here are saved the last address counter reading from LCD
+; Bits used in the flag register
+istr_lcd             equ    3      ;0 = send instruction to display 1 = data
+intflag              equ    4      ;0 = no interrupt occurred 1 = interrupt occurred
+
+i2c_data             equ    0x12   ;Save location for i2c data byte.
+i2c_bit              equ    0x13   ;bit counter in i2c byte transfer
+nb_data              equ    0x14   ;data number's to write (o read) in I2C operation
 
 start_buffer         equ    0x2c   ;Start buffer for i2c comunication
                                    ;buffer deep is 0x2c-0x4f, then we have 36 byte
                                    ;reserved
-
-avr32_addr           equ    b'11110010'   ;Avr32 phisical address
-
-;i2c_addr_read       equ    0xaf   ;24lc32 hardware address for read operation
-;i2c_addr_write      equ    0xae   ;24lc32 hardware address for write operation
 
 ;*******************************************************************************
 ;Memory address to write on LCD
@@ -146,13 +129,13 @@ Interrupt_routine
        subwf  i2c_data,0
        
        btfsc  STATUS,Z             
-       goto   command_recive_routine      ;yes... command
+       goto   command_receive_routine      ;yes... command
 
        movlw  0xF2                        ;data?
        subwf  i2c_data,0
        
        btfsc  STATUS,Z             
-       goto   data_recive_routine         ;yes... data
+       goto   data_receive_routine         ;yes... data
 
        movlw  0xF7                        ;request switch condition?
        subwf  i2c_data,0
@@ -173,16 +156,16 @@ uscita_interrupt
        bcf    INTCON,INTF
        retfie 
 
-command_recive_routine                    ;0xF6 = Command
+command_receive_routine                    ;0xF6 = Command
 
        bcf    flag,istr_lcd
-       goto   recive_and_store
+       goto   receive_and_store
 
-data_recive_routine                       ;0xF2 = Data
+data_receive_routine                       ;0xF2 = Data
 
        bsf    flag,istr_lcd
 
-recive_and_store
+receive_and_store
 
        clrf   nb_data
        call   start_bit_ok_but_scl_low
@@ -194,7 +177,7 @@ recive_and_store
        movwf  INDF
        incf   FSR,f
 
-recive_again_and_store
+receive_again_and_store
 
        incf   nb_data,f
        btfsc  nb_data,5            ;32 byte already recieved?
@@ -209,7 +192,7 @@ recive_again_and_store
        movf   i2c_data,w
        movwf  INDF
        incf   FSR,f
-       goto   recive_again_and_store
+       goto   receive_again_and_store
 
 memory_full
 
@@ -219,7 +202,7 @@ maybe_stop
 ;XXXXinserire controllo di stop guardando il numero di bit ricevuto
 
        movlw  start_buffer         ;Init FSR register for indirect addressing
-       movwf  FSR                  ;for read i2c data recived
+       movwf  FSR                  ;for read i2c data received
 
        btfss  flag,istr_lcd        ;data o istruction?
        goto   send_istruction
@@ -577,7 +560,7 @@ Start
        bcf    STATUS,RP0    ;Select bank of memory 0
 
        movlw  start_buffer  ;Init FSR register for indirect addressin
-       movwf  FSR           ;for storage i2c data recived
+       movwf  FSR           ;for storage i2c data received
 
        call   LcdInit       ;Init LCD
        call   LcdClear      ;and clear
@@ -601,8 +584,8 @@ init_interrupt
        movlw  0x08          ;init bit counter for i2c comunication
        movwf  i2c_bit       ;
        bcf    flag,intflag
-       movlw  start_buffer         ;Init FSR register for indirect addressin
-       movwf  FSR                  ;for storage i2c data recived
+       movlw  start_buffer         ;Init FSR register for indirect addressing
+       movwf  FSR                  ;for storage i2c data received
        bsf    STATUS,RP0           ;Select bank of memory 1
        bcf    OPTION_REG,INTEDG    ;Select INT interrupt on falling edge
        bcf    INTCON,INTF

@@ -219,75 +219,35 @@ send_istruction
 
 request_switch_condition		;0xF7
 
-	bsf	STATUS,RP0	;Select bank of memory 1
-	bsf	TRISB,6	;set RB6 as input
-	bcf	TRISB,5	;set RB5 as output
-	bcf	STATUS,RP0	;Select bank of memory 0
-	bcf	PORTB,5	;for check sx and up
-
-	btfss	PORTA,4	;Sx down?
-	goto	SX_down
-
-	btfss	PORTB,7	;Up down?
-	goto	UP_down
-
-	btfss	PORTB,6	;Confirm down?
-	goto	CONFIRM_down
-
-	bsf	STATUS,RP0	;Select bank of memory 1
-	bsf	TRISB,5	;set RB5 as input
-	bcf	TRISB,6	;set RB6 as output
-	bcf	STATUS,RP0	;Select bank of memory 0
-	bcf	PORTB,6	;for check dx and down
-
-	btfss	PORTA,4	;Dx down?
-	goto	DX_down
-
-	btfss	PORTB,7	;Down down?
-	goto	DOWN_down
-
-no_switch_press
-
-	movlw	0
-	goto	send_switch_to_i2c	
-	
-SX_down
-
-	movlw	2
-	goto	send_switch_to_i2c	
-
-DX_down
-
-	bsf	STATUS,RP0	;Select bank of memory 1
-	bsf	TRISB,6	;set RB6 as input to recheck RB6
 	bcf	STATUS,RP0	;Select bank of memory 0
 
-	btfss	PORTB,6	;Confirm down?
-	goto	CONFIRM_down
-
-	movlw	4
-	goto	send_switch_to_i2c	
-
-UP_down
-
-	movlw	8
-	goto	send_switch_to_i2c	
-
-DOWN_down
-
-	bsf	STATUS,RP0	;Select bank of memory 1
-	bsf	TRISB,6	;set RB6 as input to recheck RB6
-	bcf	STATUS,RP0	;Select bank of memory 0
-
-	btfss	PORTB,6	;Confirm down?
-	goto	CONFIRM_down
-
-	movlw	16
-	goto	send_switch_to_i2c	
-
-CONFIRM_down
-
-	movlw	32
+       movlw    0   ; no buttons pressed yet...
+      ; Check SELECT switch with all lines as inputs
+       btfss  PORTB,6
+       iorlw  32
+      ; Check RIGHT and DOWN by setting RB6 as a low output
+	bcf	PORTB,6   
+	bsf    STATUS,RP0 ; access tris
+	bcf    TRISB,6
+	bcf    STATUS,RP0 ; access ports
+       btfss  PORTA,4  ; RIGHT?
+       iorlw  4
+       btfss  PORTB,7 ; DOWN?
+       iorlw  16
+       ; Check LEFT and UP by setting RB5 as a low output
+       bcf	PORTB,5
+	bsf    STATUS,RP0 ; access tris
+       bsf    TRISB,6         ; RB6 is an input again
+       bcf    TRISB,5         ; RB5 is a low output
+       bcf    STATUS,RP0 ; access ports
+       btfss  PORTA,4       ; LEFT?
+       iorlw  2
+       btfss  PORTB,7       ; UP?
+       iorlw  8
+       ; Set RB5 back to an input
+       bsf    STATUS,RP0
+       bsf    TRISB,5
+       bcf    STATUS,RP0
 
 send_switch_to_i2c	
 
@@ -517,9 +477,6 @@ check_time_out21
 	goto	recheck_scl_pin_21
 	goto	i2c_error	
 
-
-
-
 send_ack
 
 	clrf	time_out
@@ -581,13 +538,28 @@ check_time_out2
 ;******************************************************************************
 ;******************************************************************************
 Start  
-	bsf	STATUS,RP0	;Select bank of memory 1
-	movlw	00010000B	;Config port A all output - RA4 Input for switch 
-	movwf	TRISA		;Sx - Dx
+	movlw	0xEF
+	movwf	PORTA		;Init PortA all out and all High for correct
+				;start LCD. Only RA4 must be low when in out mode
+				;for switch function
+;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+;	movlw	0x1C		;Rb7, RB6 and RB5 must be low when in out mode
+				;LCD line (E, R/W, RS) must be High.SDA and SCL must 
+				;be low when in out mode
+;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
-	movlw	11100011B	;Config port B - RB5, 6 & 7 for input switch
+	movlw	0x1F		;Rb7, RB6 and RB5 must be low when in out mode
+				;LCD line (E, R/W, RS) must be High.
+	movwf	PORTB		;For init PortB
+
+	bsf	STATUS,RP0	;Select bank of memory 1
+	movlw	00010000B	;Config port A all output - RA4 input for switch 
+	movwf	TRISA		;
+
+	movlw	11100011B	;RB6 and RB5 for input switch. RB7 out for switch
 	movwf	TRISB		;Rb1= Scl (input) Rb0=Sda (input)
 	bcf	STATUS,RP0	;Select bank of memory 0
+
 	movlw	start_buffer	;Init FSR register for indirect addressin
 	movwf	FSR		;for storage i2c data recived
 
@@ -622,24 +594,6 @@ init_interrupt
 	bsf	INTCON,INTE		;Enable INT interrupt
 	bsf	INTCON,GIE		;Enable global interrupt
 	return
-
-;**********************************************************************
-
-shortdelay    			; A short delay ;-)
-
-	nop
-       nop
-       nop
-	nop
-	nop
-	nop
-       nop
-       nop
-	nop
-	nop
-
-	return
-
 
 ;**********************************************************************
 ; Routine di ritardo
@@ -699,7 +653,7 @@ LcdInit
                 movlw   2
                 call    msDelay
 
-								;--------------------------------
+;--------------------------------
 
                 bcf     PORTA,LCD_DB4
                 bsf     PORTA,LCD_DB5

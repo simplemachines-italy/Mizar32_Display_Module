@@ -1,7 +1,7 @@
 ;***********************************************************
 ; Programma editato da Antonio Cingolani per Simplemachines
 ; per la scheda Display_module del Progetto Mizar32
-; Display_module_beta_1.1.asm V. 1.1
+; Display_module_beta_1.3.asm V. 1.1
 ; Pic 16f84 quarzo da 3,68 Mhz
 ; For better view in your text editor select 'Keep Tabs'
 ; and set Tabs sizes with 7
@@ -12,6 +12,8 @@
                 INCLUDE         "P16f84.INC"
                 ;ERRORLEVEL      -302
 								__CONFIG        0x3FF1
+
+STATUS_BNK_1	equ	0x83
 
 ;Linee di controllo dell'LCD
 
@@ -99,8 +101,8 @@ Interrupt_routine
 ;If we are here, sda pin is gone low. Look for scl pin; If scl=1 a start 
 ;condiction is TRUE
 
-	bcf	STATUS,RP0      		;Select bank of memory 0
-	bcf	INTCON,GIE			;Disable all interrupt
+;	bcf	STATUS,RP0      		;Select bank of memory 0
+;	bcf	INTCON,GIE			;Disable all interrupt
 	bsf	flag,intflag			;interrupt occurred
 	
 	btfss	PORTB,scl
@@ -143,6 +145,8 @@ Interrupt_routine
 
 uscita_interrupt				
 
+	movlw	8
+	movwf	i2c_bit
 	bcf	INTCON,INTF
 	retfie	
 
@@ -252,7 +256,7 @@ request_switch_condition		;0xF7
 send_switch_to_i2c	
 
 	movwf	i2c_data
-	call	send_value_on_i2c	
+	call	send_bit_scl_is_low	
 	goto	uscita_interrupt
 
 read_busy_flag			;0xF3
@@ -271,10 +275,6 @@ here1
 ;XXXX
 send_value_on_i2c
 
-	bsf	i2c,sda	;Put SDA line high and output
-	bsf	STATUS,RP0	;select bank 1
-	bcf	TRISB,sda	;SDA as output
-	bcf	STATUS,RP0	;select bank 0
 	goto	send_bit_scl_is_low
 
 waiting_for_send
@@ -303,12 +303,12 @@ send_bit_scl_is_low
 	clrf	time_out	;try 256 time before declare i2c time out comunication
 	rlf	i2c_data,f
 	bcf	i2c,sda
-	btfsc  STATUS, C     ; Test the carry bit
-	bsf    i2c,sda
-
-	bsf	STATUS,RP0	;select bank 1
-	bsf	TRISB,scl	;Relise scl line
-	bcf	STATUS,RP0	;select bank 0
+	bsf	STATUS,RP0		;select bank 1
+	bsf	TRISB,sda		;Prepare if C = 1
+	btfss  STATUS_BNK_1, C	;Test the carry bit
+	bcf	TRISB,sda		;If C = 0
+	bsf	TRISB,scl		;Relise scl line
+	bcf	STATUS,RP0		;select bank 0
 
 	decfsz	i2c_bit,f
 	goto	send_waiting_for_scl_up

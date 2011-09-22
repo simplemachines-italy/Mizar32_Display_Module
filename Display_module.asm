@@ -13,20 +13,55 @@
                 ;ERRORLEVEL      -302
                                                         __CONFIG        0x3FF1
 
-STATUS_BNK_1  equ    0x83
+; The bits of the I/O ports are assigned as follows:
+; PORTA
+; 7 6 5 4 3 2 1 0
+; X X X | | | | |_ LCD_DB4 (Output)
+;       | | | |___ LCD_DB5 (Output)
+;       | | |_____ LCD_DB6 (Output)
+;       | |_______ LCD_DB7 (Output)
+;       |_________ Buttons LEFT/RIGHT (OC)
+; PORTB
+; 7 6 5 4 3 2 1 0
+; | | | | | | | |_ SDA (OC)
+; | | | | | | |___ SCL (OC)
+; | | | | | |_____ LCD_RS (Output: 0=command, 1=data)
+; | | | | |_______ LCD_RW (Output: 0=write command/data, 1=read busy flag/data
+; | | | |_________ LCD_E  (Output: Strobe high for 250ns to read/write
+; | | |___________ Buttons LEFT/UP (OC)
+; | |_____________ Buttons RIGHT/DOWN/SELECT (OC)
+; |_______________ Buttons UP/DOWN (OC)
+;
+; X = any value
+; OC = Open collector output: driven low or left as an input to float high
+;
+; The OC pins must always have output value 0 and are switched using TRIS bits.
+; Attempts to set/clear bits in the ports using bcf/bsf are dangerous because
+; they do read-modify-write: if an OC bit is not driven at that moment and
+; is floating high, the bit read and written by bcf/bsf is the current input
+; value on that pin, which risks making it a high output when code switches it
+; to its low open-collector function.
+;
+; One option is always to set OC pins low before enabling them as outputs.
+; Another is to be sure only ever to write 0 into their PORT bits and never
+; use bcf/bsf on PORTs.
+; The TRIS bits, instead, can be set/cleared using bcf/bcf, since the value
+; read from them always reflects the content that was last written to them.
 
-;Linee di controllo dell'LCD
+;LCD control lines on PORTB
 
 LCD_RS          equ     2       ;Register Select on portb
 LCD_RW          equ     3       ;Read o write selection on portb
 LCD_E           equ     4       ;Lcd Enable on port portb
 
-;LCD data line bus
+;LCD data lines on PORTA
 
 LCD_DB4         equ     0       ;LCD data line DB4
 LCD_DB5         equ     1       ;LCD data line DB5
 LCD_DB6         equ     2       ;LCD data line DB6
 LCD_DB7         equ     3       ;LCD data line DB7
+
+STATUS_BNK_1  equ    0x83
 
 
 SET_EN               MACRO
@@ -173,24 +208,24 @@ recive_and_store
 
 recive_again_and_store
 
-       incf   nb_data,f                                                      ;<-|
-       btfsc  nb_data,5            ;32 byte already recieved?                ;  |
-       goto   memory_full          ;yes                                      ;  |
-                                                                             ;  |
-       call   send_ack_without_clk_down                                      ;  |
-       call   start_bit_ok                                                   ;  |
-                                                                             ;  |
-       btfsc  STATUS,C             ;error on i2c comunication?               ;  |
-       goto   maybe_stop           ;yes                                      ;  |
-                                                                             ;  |
-       movf   i2c_data,w                                                     ;  |
-       movwf  INDF                                                           ;  |
-       incf   FSR,f                                                          ;  |
-       goto   recive_again_and_store                                         ;  |
-                                                                             ;  |
-memory_full                                                                  ;  |
-                                                                             ;  |
-       decf   nb_data,f     ;last increment was wrong then decrement nb_data ;<-|
+       incf   nb_data,f
+       btfsc  nb_data,5            ;32 byte already recieved?
+       goto   memory_full          ;yes
+
+       call   send_ack_without_clk_down
+       call   start_bit_ok
+
+       btfsc  STATUS,C             ;error on i2c comunication?
+       goto   maybe_stop           ;yes
+
+       movf   i2c_data,w
+       movwf  INDF
+       incf   FSR,f
+       goto   recive_again_and_store
+
+memory_full
+
+       decf   nb_data,f     ;last increment was wrong then decrement nb_data
 
 maybe_stop
 ;XXXXinserire controllo di stop guardando il numero di bit ricevuto
@@ -226,10 +261,10 @@ request_switch_condition           ;0xF7
        bcf    STATUS,RP0    ;Select bank of memory 0
 
        movlw    0   ; no buttons pressed yet...
-      ; Check SELECT switch with all lines as inputs
+       ; Check SELECT switch with all lines as inputs
        btfss  PORTB,6
        iorlw  32
-      ; Check RIGHT and DOWN by setting RB6 as a low output
+       ; Check RIGHT and DOWN by setting RB6 as a low output
        bcf    PORTB,6   
        bsf    STATUS,RP0 ; access tris
        bcf    TRISB,6
@@ -419,7 +454,7 @@ send_ack_without_clk_down
 
        clrf   time_out
        bcf    i2c,sda       ;prepare pin sda to send ack
-       
+
 recheck_scl_pin1
 
        btfsc  i2c,scl       ;sda pin must be wrote when scl = 0
@@ -528,6 +563,8 @@ check_time_out2
 ;Inizio della MAIN routine
 ;******************************************************************************
 ;******************************************************************************
+
+
 Start  
        movlw  0xEF
        movwf  PORTA         ;Init PortA all out and all High for correct
@@ -588,70 +625,75 @@ init_interrupt
 
 ;**********************************************************************
 ; Delay routines
-;
-; W = Ritardo richiesto in ms (con quarzo a 4MHz)
 ;**********************************************************************
 
+; msDelay: Delay for W mmilliseconds
+
 ; Fosc = 3.6864MHz; instruction time = 4 clock cycles => 921600 instructions/sec
-; 1ms = 921.6 insns = 921.6/4 inner loops = 230.4  An extra 4 cycles are taken
-; by the outer loop re-initialization, giving barely over 1ms
+; 1ms = 921.6 insns = 921.6/4 inner loops = 230.4 iterations.
+; An extra 4 cycles are taken by the outer loop re-initialization,
+; giving a few cycles over 1ms per inner loop.
 
 msDelay
-                movwf   DelayCounter+1    ; Number of milliseconds
-              movlw  .230          ; inner loop cycles for one ms
+       movwf   DelayCounter+1    ; number of milliseconds to delay for
+       movlw   .230              ; cycles of inner loop to get one millisecond
 
-msDelayLoop1  movwf  DelayCounter+0       ; 1 insn
-                ; Internal loop takes one millisecond
+msDelayLoop1
+       movwf   DelayCounter+0    ; 1 cycle
+
+       ; Inner loop takes one millisecond
 msDelayLoop2
-                nop                       ; 1 insn
-                decfsz  DelayCounter+0,F  ; 1 insn
-                goto    msDelayLoop2             ; 2 insn
+       nop                       ; 1 cycle
+       decfsz  DelayCounter+0,F  ; 1 cycle when looping
+       goto    msDelayLoop2      ; 2 cycles
 
-                decfsz  DelayCounter+1,F  ; 1 insn
-                goto    msDelayLoop1             ; 2 insn
+       decfsz  DelayCounter+1,F  ; 1 cycle when looping
+       goto    msDelayLoop1      ; 2 cycles
 
-                return
+       return
 
 ; Delay for 39 microseconds.
 ; 921600 * 0.000039 = 35.9 instructions.
 ; Overhead: CALL (2), MOVLW(1), MOVWF(1), return(2) = 6 insns. 30/3 = 10
+
 Delay39us
-              movlw  .10
-              movwf  DelayCounter
+       movlw  .10
+       movwf  DelayCounter
+
 Delay39usLoop
-              decfsz DelayCounter         ; 1 cycle
-                goto    Delay39usLoop            ; 2 cycles
+       decfsz DelayCounter         ; 1 cycle
+       goto   Delay39usLoop        ; 2 cycles
               
-              return
+       return
 
 
 ; Delay for 43 microseconds.
 ; 921600 * 0.000043 = 39.6288 instructions.
 ; Overhead: CALL (2), NOP(1) MOVLW(1), MOVWF(1), return(2) = 7 insns. 33/3 = 11
 Delay43us
-              nop
-              movlw  .11
-              movwf  DelayCounter
+       nop
+       movlw  .11
+       movwf  DelayCounter
 Delay43usLoop
-              decfsz DelayCounter         ; 1 cycle
-                goto    Delay43usLoop            ; 2 cycles
+       decfsz DelayCounter         ; 1 cycle
+       goto    Delay43usLoop       ; 2 cycles
               
-              return
+       return
 
 
 ; Delay for 1.53 milliseconds.
 ; 921600 * 0.00153 = 1410.048 insns
 ; 1410/6 = 235.0, with overhead of 6 cycles, we use 234
 Delay1_53ms
-              movlw  .234
-              movwf  DelayCounter
+       movlw  .234
+       movwf  DelayCounter
 Delay1_53usLoop
-              goto   $+1                  ; 2 cycles
-              nop                         ; 1 cycle
-              decfsz DelayCounter         ; 1 cycle
-                goto    Delay1_53usLoop          ; 2 cycles
+       goto   $+1                  ; 2 cycles
+       nop                         ; 1 cycle
+       decfsz DelayCounter         ; 1 cycle
+       goto   Delay1_53usLoop      ; 2 cycles
               
-              return
+       return
               
 
 ;**********************************************************************
@@ -661,60 +703,60 @@ Delay1_53usLoop
 ;**********************************************************************
 
 LcdInit
-                bcf     PORTB,LCD_E     ;Disabilita l'LCD
-                bcf     PORTB,LCD_RS    ;Mette l'LCD in modo comando
-                bcf     PORTB,LCD_RW    ;abilita modo scrittura sull'LCD
+              bcf     PORTB,LCD_E     ;Disabilita l'LCD
+              bcf     PORTB,LCD_RS    ;Mette l'LCD in modo comando
+              bcf     PORTB,LCD_RW    ;abilita modo scrittura sull'LCD
 
-                movlw   30
-                call    msDelay
+              movlw   30
+              call    msDelay
 
-                ; Invia all'LCD la sequenza di reset
+              ; Invia all'LCD la sequenza di reset
 
-                bsf     PORTA,LCD_DB4
-                bsf     PORTA,LCD_DB5
-                bcf     PORTA,LCD_DB6
-                bcf     PORTA,LCD_DB7
+              bsf     PORTA,LCD_DB4
+              bsf     PORTA,LCD_DB5
+              bcf     PORTA,LCD_DB6
+              bcf     PORTA,LCD_DB7
 
-                EN_STROBE
-                call    Delay39us
+              EN_STROBE
+              call    Delay39us
 
-                EN_STROBE
-                call    Delay39us
+              EN_STROBE
+              call    Delay39us
 
-                EN_STROBE
-                call    Delay39us
+              EN_STROBE
+              call    Delay39us
 
 ;--------------------------------
 
-                bcf     PORTA,LCD_DB4
-                bsf     PORTA,LCD_DB5
-                bcf     PORTA,LCD_DB6
-                bcf     PORTA,LCD_DB7
+              bcf     PORTA,LCD_DB4
+              bsf     PORTA,LCD_DB5
+              bcf     PORTA,LCD_DB6
+              bcf     PORTA,LCD_DB7
 
-                EN_STROBE
-                call    Delay39us
+              EN_STROBE
+              call    Delay39us
 
-                ;Configura il bus dati a 4 bit
+              ;Configura il bus dati a 4 bit
 
-                movlw   0x28
-                call    LcdSendCommand
+              movlw   0x28
+              call    LcdSendCommand
 
-                ;Entry mode set, increment, no shift
+              ;Entry mode set, increment, no shift
 
-                movlw   0x06
-                call    LcdSendCommand
+              movlw   0x06
+              call    LcdSendCommand
 
-                ;Display ON, Curson OFF, Blink OFF
+              ;Display ON, Curson OFF, Blink OFF
 
-                movlw   0x0C
-                call    LcdSendCommand
+              movlw   0x0C
+              call    LcdSendCommand
 
               ; Clear display
 
-                movlw   0x01
-                call    LcdSendCommand
+              movlw   0x01
+              call    LcdSendCommand
 
-                return
+              return
 
 
 ;**********************************************************************
@@ -722,8 +764,8 @@ LcdInit
 ;**********************************************************************
 
 LcdClear
-                movlw   0x01
-                goto    LcdSendCommand    ; tail call
+              movlw   0x01
+              goto    LcdSendCommand    ; tail call
 
 ;**********************************************************************
 ; Locate cursor on LCD
@@ -731,22 +773,22 @@ LcdClear
 ;**********************************************************************
 
 LcdLocate
-                movwf   tmpLcdRegister+0
+              movwf   tmpLcdRegister+0
 
-                movlw   0x80
-                movwf   tmpLcdRegister+1
+              movlw   0x80
+              movwf   tmpLcdRegister+1
 
-                movf    tmpLcdRegister+0,W
-                andlw   0x0F
-                iorwf   tmpLcdRegister+1,F
+              movf    tmpLcdRegister+0,W
+              andlw   0x0F
+              iorwf   tmpLcdRegister+1,F
 
-                btfsc   tmpLcdRegister+0,4
-                bsf     tmpLcdRegister+1,6
+              btfsc   tmpLcdRegister+0,4
+              bsf     tmpLcdRegister+1,6
 
-                movf    tmpLcdRegister+1,W
-                call    LcdSendCommand
+              movf    tmpLcdRegister+1,W
+              call    LcdSendCommand
 
-                return
+              return
 
 
 ;**********************************************************************
@@ -764,8 +806,8 @@ LcdSendCommand
               andlw  1111111100B   ; Sets Z if command was 0 to 3
               movlw  2             ; Set delay: does not affect Z
               btfsc  STATUS,Z      ; Long delay if Z is set
-              goto    Delay1_53ms  ; tail call to long delay
-              goto    Delay39us    ; tail call to short delay
+              goto   Delay1_53ms   ; tail call to long delay
+              goto   Delay39us     ; tail call to short delay
 
 ;**********************************************************************
 ; Send a datum to the LCD
@@ -783,23 +825,24 @@ LcdSendData
 ;**********************************************************************
 
 LcdSendByte
-                ;Save value to send
-                movwf   tmpLcdRegister
+              ;Save value to send
+              movwf   tmpLcdRegister
 
-                ; Send the four most significant bits
+              ; Send the four most significant bits
               swapf  tmpLcdRegister,w
               movwf  PORTA
-                EN_STROBE
+              EN_STROBE
 
               ; Send the four least significant bits
               movf   tmpLcdRegister,w
               movwf  PORTA
-                EN_STROBE
+              EN_STROBE
 
-                return
+              return
+
 ;**********************************************************************
 ;Soubroutines End here
 ;**********************************************************************
 
 
-                END
+              END

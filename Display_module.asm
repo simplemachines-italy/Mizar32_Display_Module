@@ -395,18 +395,9 @@ waiting_for_scl_up
 
 looking_for_sda_value
 
-       btfss  i2c,sda       ;read sda bit and store in i2c_data register
-       goto   c_0
-c_1
-       bsf    STATUS,C
-       rlf    i2c_data,f
-       goto   check_i2c_bit
-c_0    
-       bcf    STATUS,C
-       rlf    i2c_data,f
-
-check_i2c_bit
-       
+       ; SDA is bit 0 of PORTB, so just roll it in via the carry flag.
+       rrf    i2c,w         ;put bit 0 into C
+       rlf    i2c_data,f    ;put C into bit 0
        decfsz i2c_bit,f
        goto   start_bit_ok
 

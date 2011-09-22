@@ -61,21 +61,9 @@ LCD_DB5         equ     1       ;LCD data line DB5
 LCD_DB6         equ     2       ;LCD data line DB6
 LCD_DB7         equ     3       ;LCD data line DB7
 
-STATUS_BNK_1  equ    0x83
-
-
-SET_EN               MACRO
+EN_STROBE            MACRO
                 bsf  PORTB,LCD_E
-                     ENDM
-
-CLEAR_EN             MACRO
                 bcf  PORTB,LCD_E
-                     ENDM
-
-EN_STROBE                          MACRO
-                SET_EN
-                nop
-                CLEAR_EN
                      ENDM
 
 sda           equ    0      ;PortB bit 0 is sda pin
@@ -340,7 +328,7 @@ send_bit_scl_is_low
        bcf    i2c,sda
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,sda            ;Prepare if C = 1
-       btfss  STATUS_BNK_1, C      ;Test the carry bit
+       btfss  STATUS, C            ;Test the carry bit
        bcf    TRISB,sda            ;If C = 0
        bsf    TRISB,scl            ;Relise scl line
        bcf    STATUS,RP0           ;select bank 0
@@ -703,19 +691,18 @@ Delay1_53usLoop
 ;**********************************************************************
 
 LcdInit
-              bcf     PORTB,LCD_E     ;Disabilita l'LCD
-              bcf     PORTB,LCD_RS    ;Mette l'LCD in modo comando
-              bcf     PORTB,LCD_RW    ;abilita modo scrittura sull'LCD
+              ;bcf     PORTB,LCD_E     ;Lower the enable strobe
+              ;bcf     PORTB,LCD_RS    ;Put the LCD in command mode
+              ;bcf     PORTB,LCD_RW    ;Enable writing mode to the LCD
+              clrf    PORTB           ;equivalent
 
               movlw   30
               call    msDelay
 
               ; Invia all'LCD la sequenza di reset
 
-              bsf     PORTA,LCD_DB4
-              bsf     PORTA,LCD_DB5
-              bcf     PORTA,LCD_DB6
-              bcf     PORTA,LCD_DB7
+              movlw   00000011B
+              movwf   PORTA
 
               EN_STROBE
               call    Delay39us
@@ -728,15 +715,13 @@ LcdInit
 
 ;--------------------------------
 
-              bcf     PORTA,LCD_DB4
-              bsf     PORTA,LCD_DB5
-              bcf     PORTA,LCD_DB6
-              bcf     PORTA,LCD_DB7
+              movlw   00000010B
+              movwf   PORTA
 
               EN_STROBE
               call    Delay39us
 
-              ;Configura il bus dati a 4 bit
+              ;Configure the data bus to 4 bits
 
               movlw   0x28
               call    LcdSendCommand

@@ -556,13 +556,11 @@ Start
        call   LcdInit       ;Init LCD
        call   LcdClear      ;and clear
 
-       ; Initialize the registers
-
-       ;movlw  start_buffer  ;Init FSR register for indirect addressin
-       ;movwf  FSR           ;for storage i2c data received
+       ; Pre-initialize the registers used in the interrupt routine
+       ; so that it can respond more quickly
 
        movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit       ;
+       movwf  i2c_bit
 
        ; enable interrupts
 

@@ -1,16 +1,17 @@
 ;***********************************************************
-; Programma editato da Antonio Cingolani per Simplemachines
-; per la scheda Display_module del Progetto Mizar32
-; Display_module_beta_1.3.asm V. 1.1
-; Pic 16f84 quarzo da 3,68 Mhz
-; For better view in your text editor select 'Keep Tabs'
-; and set Tabs sizes with 7
+; Program created by Antonio Cingolani for Simplemachines
+; for the Display module of the Mizr32 project
+;
+; Based on Display_module_beta_1.3.asm V. 1.1,
+; hacked by Martin Guy in Septempber 2011
+;
+; The Pic 16f84 clock crystal runs at 3,68 Mhz
 ;************************************************************
 
                 PROCESSOR       16F84
                 RADIX           DEC
-                INCLUDE         "P16f84.INC"
-                ;ERRORLEVEL      -302
+                INCLUDE         "p16f84.inc"
+                ERRORLEVEL      -302
                                                         __CONFIG        0x3FF1
 
 ; The bits of the I/O ports are assigned as follows:

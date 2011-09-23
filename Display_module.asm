@@ -277,10 +277,6 @@ here1
 
 ;--------------------------------------
 
-send_value_on_i2c
-
-       goto   send_bit_scl_is_low
-
 waiting_for_send
 
        clrf   time_out      ;try 256 times before declaring i2c time out

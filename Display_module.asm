@@ -69,7 +69,6 @@ EN_STROBE            MACRO
 sda           equ    0      ;PortB bit 0 is sda pin
 scl           equ    1      ;PortB bit 1 is scl pin
 i2c           equ    PORTB  ;
-I2CTRIS       equ    TRISB
 
 ;Used PIC memory ORG 0x0C
 
@@ -93,6 +92,7 @@ nb_data              equ    0x17   ;Number of bytes read from I2C into buffer
 start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
                                    ;buffer depth is 0x2c-0x4f, so we have 36
                                    ;bytes maximum (32 are used)
+
 ;*******************************************************************************
 ;Memory address to write on LCD
 ;*******************************************************************************
@@ -109,8 +109,6 @@ Interrupt_routine
 ;If we are here, sda pin has gone low. Look for scl pin; If scl=1 a start 
 ;condition is TRUE
 
-       bsf    flag,intflag                ;interrupt occurred
-       
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
        call   start_bit_ok  
@@ -167,7 +165,10 @@ data_receive_routine                       ;0xF2 = Data
 
 receive_and_store
 
-       clrf   nb_data
+       movlw  start_buffer  ;Init FSR register for indirect addressing
+       movwf  FSR           ;for storage of i2c data received
+       clrf   nb_data       ;No bytes have been received yet...
+
        call   start_bit_ok_but_scl_low
 
        btfsc  STATUS,C             ;error on i2c communication?
@@ -555,21 +556,23 @@ Start
        movwf  TRISB         ;Rb1= Scl (input) Rb0=Sda (input)
        bcf    STATUS,RP0    ;Select bank of memory 0
 
-       movlw  start_buffer  ;Init FSR register for indirect addressin
-       movwf  FSR           ;for storage i2c data received
-
        call   LcdInit       ;Init LCD
        call   LcdClear      ;and clear
 
-foreverLoop
+       ; Initialize the registers
+
+       ;movlw  start_buffer  ;Init FSR register for indirect addressin
+       ;movwf  FSR           ;for storage i2c data received
+
+       movlw  0x08          ;init bit counter for i2c communication
+       movwf  i2c_bit       ;
+
+       ; enable interrupts
 
        call   init_interrupt
 
-check_for_interrupt
-
-       btfsc  flag,intflag         ;interrupt served?
-       goto   foreverLoop          ;yes
-       goto   check_for_interrupt  ;no
+foreverLoop
+       goto   foreverLoop
 
 
 ;**********************************************************************
@@ -577,11 +580,6 @@ check_for_interrupt
 ;**********************************************************************
 init_interrupt
 
-       movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit       ;
-       bcf    flag,intflag
-       movlw  start_buffer         ;Init FSR register for indirect addressing
-       movwf  FSR                  ;for storage i2c data received
        bsf    STATUS,RP0           ;Select bank of memory 1
        bcf    OPTION_REG,INTEDG    ;Select INT interrupt on falling edge
        bcf    INTCON,INTF

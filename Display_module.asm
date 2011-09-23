@@ -74,39 +74,25 @@ I2CTRIS       equ    TRISB
 ;Used PIC memory ORG 0x0C
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
-DelayCounter  equ    0x0e   ;Two locations reserved for delay register
-general              equ    0x10   ;general pourpose register
-time_out             equ    0x11   ;Counter register for time out i2c comunications
+DelayCounter         equ    0x0e   ;Two locations reserved for delay register
+time_out             equ    0x11   ;Counter register for time out i2c communications
 
-flag                 equ    0x12   ;|Register used for flag bit allocation
-;Initializes bit-flag in register-flag-----------------------------------------------------|
-button               equ    0      ;|0 = no event on switch - 1 = event on switch          |
-switch_bit           equ    1      ;|0 = do not send the value of switch down on i2c       |
-                                   ;|1 = send the value of switch down on i2c              |
-read                 equ    2      ;|1 = read in master operation                          |                           
-write                equ    2      ;|0 = write in master operation                         |
-istr_lcd             equ    3      ;|0 = instruction to send to display                    |
-data_lcd             equ    3      ;|1 = data to send to dislpay                           |
-intflag              equ    4      ;|0 = no interrupt occurred 1 = interrupt occurred      |
-avr32                equ    5      ;|0 = send i2c word to eeprom 1 =send i2c word to avr32 |
+flag                 equ    0x12   ;Register used for flag bit allocation
+;Bits in flag register:
+istr_lcd             equ    3      ;0 = instruction to send to display
+data_lcd             equ    3      ;1 = data to send to dislpay
+intflag              equ    4      ;0 = no interrupt occurred
+                                   ;1 = an interrupt occurred
 ;------------------------------------------------------------------------------------------|
 
 i2c_data             equ    0x13   ;Save location for i2c data byte.
-i2c_bit              equ    0x14   ;bit counter in i2c byte transfert
-addr                 equ    0x15   ;address to write or to read in i2c operation
-addr_slave           equ    0x16   ;the phisical address to identify the slave
-nb_data              equ    0x17   ;data number's to write (o read) in I2C operation
-switch               equ    0x18   ;here are saved the last switch pressed
-lcd_addr_count       equ    0x19   ;here are saved the last address counter reading from LCD
+i2c_bit              equ    0x14   ;bit counter in i2c byte transfer
+nb_data              equ    0x17   ;Number of bytes read from I2C into buffer
+                                   ;and number of bytes left to write to LCD
 
-start_buffer         equ    0x2c   ;Start buffer for i2c comunication
-                                   ;buffer deep is 0x2c-0x4f, then we have 36 byte
-                                   ;reserved
-
-avr32_addr           equ    b'11110010'   ;Avr32 phisical address
-
-;i2c_addr_read       equ    0xaf   ;24lc32 hardware address for read operation
-;i2c_addr_write      equ    0xae   ;24lc32 hardware address for write operation
+start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
+                                   ;buffer depth is 0x2c-0x4f, so we have 36
+                                   ;bytes maximum (32 are used)
 
 ;*******************************************************************************
 ;Memory address to write on LCD
@@ -121,18 +107,16 @@ avr32_addr           equ    b'11110010'   ;Avr32 phisical address
        org    0x0004 ;Start interrupt routine
 
 Interrupt_routine
-;If we are here, sda pin is gone low. Look for scl pin; If scl=1 a start 
-;condiction is TRUE
+;If we are here, sda pin has gone low. Look for scl pin; If scl=1 a start 
+;condition is TRUE
 
-;      bcf    STATUS,RP0                  ;Select bank of memory 0
-;      bcf    INTCON,GIE                  ;Disable all interrupt
        bsf    flag,intflag                ;interrupt occurred
        
        btfss  PORTB,scl
-       goto   uscita_interrupt            ;If no start condiction go out
+       goto   uscita_interrupt            ;If no start condition go out
        call   start_bit_ok  
 
-       btfsc  STATUS,C                    ;error on i2c comunication?
+       btfsc  STATUS,C                    ;error on i2c communication?
        goto   uscita_interrupt            ;yes
 
        movlw  0xF2
@@ -146,13 +130,13 @@ Interrupt_routine
        subwf  i2c_data,0
        
        btfsc  STATUS,Z             
-       goto   command_recive_routine      ;yes... command
+       goto   command_receive_routine      ;yes... command
 
        movlw  0xF2                        ;data?
        subwf  i2c_data,0
        
        btfsc  STATUS,Z             
-       goto   data_recive_routine         ;yes... data
+       goto   data_receive_routine         ;yes... data
 
        movlw  0xF7                        ;request switch condition?
        subwf  i2c_data,0
@@ -173,55 +157,55 @@ uscita_interrupt
        bcf    INTCON,INTF
        retfie 
 
-command_recive_routine                    ;0xF6 = Command
+command_receive_routine                    ;0xF6 = Command
 
        bcf    flag,istr_lcd
-       goto   recive_and_store
+       goto   receive_and_store
 
-data_recive_routine                       ;0xF2 = Data
+data_receive_routine                       ;0xF2 = Data
 
        bsf    flag,istr_lcd
 
-recive_and_store
+receive_and_store
 
        clrf   nb_data
        call   start_bit_ok_but_scl_low
 
-       btfsc  STATUS,C             ;error on i2c comunication?
+       btfsc  STATUS,C             ;error on i2c communication?
        goto   uscita_interrupt     ;yes
        
        movf   i2c_data,w
        movwf  INDF
        incf   FSR,f
 
-recive_again_and_store
+receive_again_and_store
 
        incf   nb_data,f
-       btfsc  nb_data,5            ;32 byte already recieved?
+       btfsc  nb_data,5            ;32 byte already received?
        goto   memory_full          ;yes
 
        call   send_ack_without_clk_down
        call   start_bit_ok
 
-       btfsc  STATUS,C             ;error on i2c comunication?
+       btfsc  STATUS,C             ;error on i2c communication?
        goto   maybe_stop           ;yes
 
        movf   i2c_data,w
        movwf  INDF
        incf   FSR,f
-       goto   recive_again_and_store
+       goto   receive_again_and_store
 
 memory_full
 
-       decf   nb_data,f     ;last increment was wrong then decrement nb_data
+       decf   nb_data,f     ;last increment was wrong so decrement nb_data
 
 maybe_stop
 ;XXXXinserire controllo di stop guardando il numero di bit ricevuto
 
        movlw  start_buffer         ;Init FSR register for indirect addressing
-       movwf  FSR                  ;for read i2c data recived
+       movwf  FSR                  ;for read i2c data received
 
-       btfss  flag,istr_lcd        ;data o istruction?
+       btfss  flag,istr_lcd        ;data or istruction?
        goto   send_istruction
 
 send_data
@@ -290,19 +274,15 @@ here1
        goto   uscita_interrupt
 
 
+;--------------------------------------
 
-
-
-
-
-;XXXX
 send_value_on_i2c
 
        goto   send_bit_scl_is_low
 
 waiting_for_send
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
 
 waiting_for_first_send
 
@@ -323,14 +303,14 @@ send_bit
 
 send_bit_scl_is_low
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
        rlf    i2c_data,f
        bcf    i2c,sda
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,sda            ;Prepare if C = 1
        btfss  STATUS, C            ;Test the carry bit
        bcf    TRISB,sda            ;If C = 0
-       bsf    TRISB,scl            ;Relise scl line
+       bsf    TRISB,scl            ;Release scl line
        bcf    STATUS,RP0           ;select bank 0
 
        decfsz i2c_bit,f
@@ -362,22 +342,22 @@ wait_for_end_i2c
 waiting_for_low_scl_again
 
        btfss  i2c,scl
-       goto   relise_sda_line
+       goto   release_sda_line
 
        decfsz time_out,f    ;time_out reached?
        goto   waiting_for_low_scl_again
        goto   i2c_error
 
-relise_sda_line
+release_sda_line
 
        bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,sda     ;Relise SDA line
+       bsf    TRISB,sda     ;release SDA line
        bcf    STATUS,RP0    ;select bank 0
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
 
-       bcf    STATUS,C      ;comunication ok
+       bcf    STATUS,C      ;communication ok
        return
 
 ;******************************************************************************
@@ -386,13 +366,13 @@ relise_sda_line
 start_bit_ok_but_scl_low
 
        bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,scl     ;Relise scl line
+       bsf    TRISB,scl     ;release scl line
        bcf    STATUS,RP0    ;select bank 0
 
 start_bit_ok
-;If start condiction i true than execute this code
+;If start condition is true than execute this code
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 time before declaring i2c time out
 
 waiting_for_scl_down
 
@@ -405,7 +385,7 @@ waiting_for_scl_down
 
 first_scl_down
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
        
 waiting_for_scl_up
 
@@ -424,16 +404,16 @@ looking_for_sda_value
        decfsz i2c_bit,f
        goto   start_bit_ok
 
-i2c_comunication_ok
+i2c_communication_ok
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
-       bcf    STATUS,C             ;comunication ok
+       bcf    STATUS,C             ;communication ok
        return
 
 i2c_error
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
        bsf    STATUS,C
        return
@@ -445,7 +425,7 @@ send_ack_without_clk_down
 
 recheck_scl_pin1
 
-       btfsc  i2c,scl       ;sda pin must be wrote when scl = 0
+       btfsc  i2c,scl       ;sda pin must be written when scl = 0
        goto   check_time_out12
 
        bsf    STATUS,RP0    ;select bank 1
@@ -577,7 +557,7 @@ Start
        bcf    STATUS,RP0    ;Select bank of memory 0
 
        movlw  start_buffer  ;Init FSR register for indirect addressin
-       movwf  FSR           ;for storage i2c data recived
+       movwf  FSR           ;for storage i2c data received
 
        call   LcdInit       ;Init LCD
        call   LcdClear      ;and clear
@@ -598,11 +578,11 @@ check_for_interrupt
 ;**********************************************************************
 init_interrupt
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit       ;
        bcf    flag,intflag
-       movlw  start_buffer         ;Init FSR register for indirect addressin
-       movwf  FSR                  ;for storage i2c data recived
+       movlw  start_buffer         ;Init FSR register for indirect addressing
+       movwf  FSR                  ;for storage i2c data received
        bsf    STATUS,RP0           ;Select bank of memory 1
        bcf    OPTION_REG,INTEDG    ;Select INT interrupt on falling edge
        bcf    INTCON,INTF
@@ -649,7 +629,7 @@ Delay39us
        movwf  DelayCounter
 
 Delay39usLoop
-       decfsz DelayCounter         ; 1 cycle
+       decfsz DelayCounter,f       ; 1 cycle
        goto   Delay39usLoop        ; 2 cycles
               
        return
@@ -663,8 +643,8 @@ Delay43us
        movlw  .11
        movwf  DelayCounter
 Delay43usLoop
-       decfsz DelayCounter         ; 1 cycle
-       goto    Delay43usLoop       ; 2 cycles
+       decfsz DelayCounter,f       ; 1 cycle
+       goto   Delay43usLoop        ; 2 cycles
               
        return
 
@@ -678,16 +658,15 @@ Delay1_53ms
 Delay1_53usLoop
        goto   $+1                  ; 2 cycles
        nop                         ; 1 cycle
-       decfsz DelayCounter         ; 1 cycle
+       decfsz DelayCounter,f         ; 1 cycle
        goto   Delay1_53usLoop      ; 2 cycles
               
        return
               
 
 ;**********************************************************************
-; Inizializza il display LCD
-; Questa funzione deve essere chiamata prima di ogni altra funzione
-; di gestione dell'LCD
+; Initialize the LCD display
+; This function must be called before any other function that drives the LCD
 ;**********************************************************************
 
 LcdInit
@@ -699,7 +678,7 @@ LcdInit
               movlw   30
               call    msDelay
 
-              ; Invia all'LCD la sequenza di reset
+              ; Send the reset sequence to the LCD
 
               movlw   00000011B
               movwf   PORTA
@@ -788,7 +767,7 @@ LcdSendCommand
               ; 1.53ms delay is necessary for commands (0), 1, 2 and 3
               ; 39us delay is necessary for all the other commands
               movf   tmpLcdRegister,w; Recover value of w (the command)
-              andlw  1111111100B   ; Sets Z if command was 0 to 3
+              andlw  11111100B     ; Sets Z if command was 0 to 3
               movlw  2             ; Set delay: does not affect Z
               btfsc  STATUS,Z      ; Long delay if Z is set
               goto   Delay1_53ms   ; tail call to long delay

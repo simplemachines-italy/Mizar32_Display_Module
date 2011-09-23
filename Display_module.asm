@@ -75,22 +75,24 @@ I2CTRIS       equ    TRISB
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
 DelayCounter         equ    0x0e   ;Two locations reserved for delay register
-time_out             equ    0x10   ;Counter for time out in I2C communication
+time_out             equ    0x11   ;Counter register for time out i2c communications
 
-flag                 equ    0x11   ;Register used for flag bit allocation
+flag                 equ    0x12   ;Register used for flag bit allocation
+;Bits in flag register:
+istr_lcd             equ    3      ;0 = instruction to send to display
+data_lcd             equ    3      ;1 = data to send to dislpay
+intflag              equ    4      ;0 = no interrupt occurred
+                                   ;1 = an interrupt occurred
+;------------------------------------------------------------------------------------------|
 
-; Bits used in the flag register
-istr_lcd             equ    3      ;0 = send instruction to display 1 = data
-intflag              equ    4      ;0 = no interrupt occurred 1 = interrupt occurred
+i2c_data             equ    0x13   ;Save location for i2c data byte.
+i2c_bit              equ    0x14   ;bit counter in i2c byte transfer
+nb_data              equ    0x17   ;Number of bytes read from I2C into buffer
+                                   ;and number of bytes left to write to LCD
 
-i2c_data             equ    0x12   ;Save location for i2c data byte.
-i2c_bit              equ    0x13   ;bit counter in i2c byte transfer
-nb_data              equ    0x14   ;data number's to write (o read) in I2C operation
-
-start_buffer         equ    0x2c   ;Start buffer for i2c comunication
-                                   ;buffer deep is 0x2c-0x4f, then we have 36 byte
-                                   ;reserved
-
+start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
+                                   ;buffer depth is 0x2c-0x4f, so we have 36
+                                   ;bytes maximum (32 are used)
 ;*******************************************************************************
 ;Memory address to write on LCD
 ;*******************************************************************************
@@ -104,18 +106,16 @@ start_buffer         equ    0x2c   ;Start buffer for i2c comunication
        org    0x0004 ;Start interrupt routine
 
 Interrupt_routine
-;If we are here, sda pin is gone low. Look for scl pin; If scl=1 a start 
-;condiction is TRUE
+;If we are here, sda pin has gone low. Look for scl pin; If scl=1 a start 
+;condition is TRUE
 
-;      bcf    STATUS,RP0                  ;Select bank of memory 0
-;      bcf    INTCON,GIE                  ;Disable all interrupt
        bsf    flag,intflag                ;interrupt occurred
        
        btfss  PORTB,scl
-       goto   uscita_interrupt            ;If no start condiction go out
+       goto   uscita_interrupt            ;If no start condition go out
        call   start_bit_ok  
 
-       btfsc  STATUS,C                    ;error on i2c comunication?
+       btfsc  STATUS,C                    ;error on i2c communication?
        goto   uscita_interrupt            ;yes
 
        movlw  0xF2
@@ -170,7 +170,7 @@ receive_and_store
        clrf   nb_data
        call   start_bit_ok_but_scl_low
 
-       btfsc  STATUS,C             ;error on i2c comunication?
+       btfsc  STATUS,C             ;error on i2c communication?
        goto   uscita_interrupt     ;yes
        
        movf   i2c_data,w
@@ -180,13 +180,13 @@ receive_and_store
 receive_again_and_store
 
        incf   nb_data,f
-       btfsc  nb_data,5            ;32 byte already recieved?
+       btfsc  nb_data,5            ;32 byte already received?
        goto   memory_full          ;yes
 
        call   send_ack_without_clk_down
        call   start_bit_ok
 
-       btfsc  STATUS,C             ;error on i2c comunication?
+       btfsc  STATUS,C             ;error on i2c communication?
        goto   maybe_stop           ;yes
 
        movf   i2c_data,w
@@ -196,7 +196,7 @@ receive_again_and_store
 
 memory_full
 
-       decf   nb_data,f     ;last increment was wrong then decrement nb_data
+       decf   nb_data,f     ;last increment was wrong so decrement nb_data
 
 maybe_stop
 ;XXXXinserire controllo di stop guardando il numero di bit ricevuto
@@ -204,7 +204,7 @@ maybe_stop
        movlw  start_buffer         ;Init FSR register for indirect addressing
        movwf  FSR                  ;for read i2c data received
 
-       btfss  flag,istr_lcd        ;data o istruction?
+       btfss  flag,istr_lcd        ;data or istruction?
        goto   send_istruction
 
 send_data
@@ -273,19 +273,15 @@ here1
        goto   uscita_interrupt
 
 
+;--------------------------------------
 
-
-
-
-
-;XXXX
 send_value_on_i2c
 
        goto   send_bit_scl_is_low
 
 waiting_for_send
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
 
 waiting_for_first_send
 
@@ -306,14 +302,14 @@ send_bit
 
 send_bit_scl_is_low
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
        rlf    i2c_data,f
        bcf    i2c,sda
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,sda            ;Prepare if C = 1
        btfss  STATUS, C            ;Test the carry bit
        bcf    TRISB,sda            ;If C = 0
-       bsf    TRISB,scl            ;Relise scl line
+       bsf    TRISB,scl            ;Release scl line
        bcf    STATUS,RP0           ;select bank 0
 
        decfsz i2c_bit,f
@@ -345,22 +341,22 @@ wait_for_end_i2c
 waiting_for_low_scl_again
 
        btfss  i2c,scl
-       goto   relise_sda_line
+       goto   release_sda_line
 
        decfsz time_out,f    ;time_out reached?
        goto   waiting_for_low_scl_again
        goto   i2c_error
 
-relise_sda_line
+release_sda_line
 
        bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,sda     ;Relise SDA line
+       bsf    TRISB,sda     ;release SDA line
        bcf    STATUS,RP0    ;select bank 0
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
 
-       bcf    STATUS,C      ;comunication ok
+       bcf    STATUS,C      ;communication ok
        return
 
 ;******************************************************************************
@@ -369,13 +365,13 @@ relise_sda_line
 start_bit_ok_but_scl_low
 
        bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,scl     ;Relise scl line
+       bsf    TRISB,scl     ;release scl line
        bcf    STATUS,RP0    ;select bank 0
 
 start_bit_ok
-;If start condiction i true than execute this code
+;If start condition is true than execute this code
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 time before declaring i2c time out
 
 waiting_for_scl_down
 
@@ -388,7 +384,7 @@ waiting_for_scl_down
 
 first_scl_down
 
-       clrf   time_out      ;try 256 time before declare i2c time out comunication
+       clrf   time_out      ;try 256 times before declaring i2c time out
        
 waiting_for_scl_up
 
@@ -407,16 +403,16 @@ looking_for_sda_value
        decfsz i2c_bit,f
        goto   start_bit_ok
 
-i2c_comunication_ok
+i2c_communication_ok
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
-       bcf    STATUS,C             ;comunication ok
+       bcf    STATUS,C             ;communication ok
        return
 
 i2c_error
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
        bsf    STATUS,C
        return
@@ -428,7 +424,7 @@ send_ack_without_clk_down
 
 recheck_scl_pin1
 
-       btfsc  i2c,scl       ;sda pin must be wrote when scl = 0
+       btfsc  i2c,scl       ;sda pin must be written when scl = 0
        goto   check_time_out12
 
        bsf    STATUS,RP0    ;select bank 1
@@ -581,7 +577,7 @@ check_for_interrupt
 ;**********************************************************************
 init_interrupt
 
-       movlw  0x08          ;init bit counter for i2c comunication
+       movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit       ;
        bcf    flag,intflag
        movlw  start_buffer         ;Init FSR register for indirect addressing
@@ -632,7 +628,7 @@ Delay39us
        movwf  DelayCounter
 
 Delay39usLoop
-       decfsz DelayCounter         ; 1 cycle
+       decfsz DelayCounter,f       ; 1 cycle
        goto   Delay39usLoop        ; 2 cycles
               
        return
@@ -646,8 +642,8 @@ Delay43us
        movlw  .11
        movwf  DelayCounter
 Delay43usLoop
-       decfsz DelayCounter         ; 1 cycle
-       goto    Delay43usLoop       ; 2 cycles
+       decfsz DelayCounter,f       ; 1 cycle
+       goto   Delay43usLoop        ; 2 cycles
               
        return
 
@@ -661,16 +657,15 @@ Delay1_53ms
 Delay1_53usLoop
        goto   $+1                  ; 2 cycles
        nop                         ; 1 cycle
-       decfsz DelayCounter         ; 1 cycle
+       decfsz DelayCounter,f         ; 1 cycle
        goto   Delay1_53usLoop      ; 2 cycles
               
        return
               
 
 ;**********************************************************************
-; Inizializza il display LCD
-; Questa funzione deve essere chiamata prima di ogni altra funzione
-; di gestione dell'LCD
+; Initialize the LCD display
+; This function must be called before any other function that drives the LCD
 ;**********************************************************************
 
 LcdInit
@@ -682,7 +677,7 @@ LcdInit
               movlw   30
               call    msDelay
 
-              ; Invia all'LCD la sequenza di reset
+              ; Send the reset sequence to the LCD
 
               movlw   00000011B
               movwf   PORTA
@@ -771,7 +766,7 @@ LcdSendCommand
               ; 1.53ms delay is necessary for commands (0), 1, 2 and 3
               ; 39us delay is necessary for all the other commands
               movf   tmpLcdRegister,w; Recover value of w (the command)
-              andlw  1111111100B   ; Sets Z if command was 0 to 3
+              andlw  11111100B     ; Sets Z if command was 0 to 3
               movlw  2             ; Set delay: does not affect Z
               btfsc  STATUS,Z      ; Long delay if Z is set
               goto   Delay1_53ms   ; tail call to long delay

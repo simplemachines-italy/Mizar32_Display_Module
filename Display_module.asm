@@ -14,6 +14,14 @@
                 ERRORLEVEL      -302
                                                         __CONFIG        0x3FF1
 
+
+; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
+; routine with the main program doing nothing.  If it is undefined, we run
+; everything in the main routine with no interrupts.
+
+;#define INTERRUPT
+
+
 ; The bits of the I/O ports are assigned as follows:
 ; PORTA
 ; 7 6 5 4 3 2 1 0
@@ -95,23 +103,104 @@ start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
                                    ;bytes maximum (32 are used)
 
 ;*******************************************************************************
-;Memory address to write on LCD
+; Macros to make code more readable
+;*******************************************************************************
+
+; An abbreviation for labels that are local to a macro definition
+#define L local
+
+
+; PIC register bank selectors, to access the PORT or the TRIS registers.
+
+select_port_bank    macro
+        bcf     STATUS,RP0      ;select bank 0 for the PORT registers
+    endm
+
+select_tris_bank    macro
+        bsf     STATUS,RP0      ;select bank 1 for the TRIS registers
+    endm
+
+
+; conditionally execute the following single instruction
+
+if_low    macro    pin
+        btfss   i2c,pin     ; skip if high
+    endm
+
+if_high   macro    pin
+        btfsc   i2c,pin     ; skip if low
+    endm
+
+
+; Loop until a pin (sda/scl) is high/low
+
+; Loop until a pin is high
+wait_for_high    macro    pin
+ L loop = $
+        if_low  pin
+            goto loop
+    endm
+
+; Loop until a pin is low
+wait_for_low    macro    pin
+ L loop = $
+        if_high  pin
+            goto loop
+    endm
+
+
+;*******************************************************************************
+; Start of code
 ;*******************************************************************************
 
 
-     ;Start program
+#ifdef INTERRUPT
 
-       ORG    0x0000
-       goto   Start
+       org    0x0000   ; Main program
+       
+       call   initialize
+       call   init_interrupt
+       goto   $                ; do nothing forever
 
-       org    0x0004 ;Start interrupt routine
+       org    0x0004   ; Interrupt routine
 
-Interrupt_routine
 ;If we are here, sda pin has gone low. Look for scl pin; If scl=1 a start 
 ;condition is TRUE
 
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
+
+#else
+
+       ORG    0x0000
+
+       call   initialize
+       goto   wait_for_start
+
+; When we fail, instead of leaving the interrupt routine, we come back here,
+; reset the dirtied variables and wait for another start condition.
+uscita_interrupt
+       movlw  8
+       movwf  i2c_bit
+
+wait_for_start
+	; Optionally, we could also check for seeing SCL high here.
+
+        if_low  sda
+            goto wait_for_start
+start_seen_SDA          ; We've seen SDA high
+        if_low  scl
+            goto wait_for_start
+                        ; We've seen SDA high, SCL high
+        if_high sda
+            goto start_seen_SDA
+                        ; We've seen SDA high, SCL high, SDA low
+        if_low  scl
+            goto wait_for_start
+        ; START sequence complete
+
+#endif
+
        call   start_bit_ok  
 
        btfsc  STATUS,C                    ;error on i2c communication?
@@ -148,12 +237,17 @@ Interrupt_routine
        btfsc  STATUS,Z             
        goto   read_busy_flag              ;yes... request for 'Read Busy Flag and Address'?
 
+#ifdef INTERRUPT
+
 uscita_interrupt                          
 
        movlw  8
        movwf  i2c_bit
        bcf    INTCON,INTF
        retfie 
+#else
+       goto uscita_interrupt
+#endif
 
 command_receive_routine                    ;0xF6 = Command
 
@@ -525,12 +619,12 @@ check_time_out2
 
 ;******************************************************************************
 ;******************************************************************************
-;Inizio della MAIN routine
+;Initialize the hardware and our variables
 ;******************************************************************************
 ;******************************************************************************
 
+initialize
 
-Start  
        movlw  0xEF
        movwf  PORTA         ;Init PortA all out and all High for correct
                             ;start LCD. Only RA4 must be low when in out mode
@@ -562,12 +656,7 @@ Start
        movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
 
-       ; enable interrupts
-
-       call   init_interrupt
-
-foreverLoop
-       goto   foreverLoop
+       return
 
 
 ;**********************************************************************

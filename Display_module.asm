@@ -18,8 +18,9 @@
 ; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
+; Comment it out or delete this line if you want the main-program version.
 
-;#define INTERRUPT
+;INTERRUPT equ 1
 
 
 ; The bits of the I/O ports are assigned as follows:
@@ -154,7 +155,7 @@ wait_for_low    macro    pin
 ;*******************************************************************************
 
 
-#ifdef INTERRUPT
+    ifdef INTERRUPT
 
        org    0x0000   ; Main program
        
@@ -170,7 +171,7 @@ wait_for_low    macro    pin
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
 
-#else
+   else
 
        ORG    0x0000
 
@@ -199,7 +200,7 @@ start_seen_SDA          ; We've seen SDA high
             goto wait_for_start
         ; START sequence complete
 
-#endif
+   endif
 
        call   start_bit_ok  
 
@@ -237,7 +238,9 @@ start_seen_SDA          ; We've seen SDA high
        btfsc  STATUS,Z             
        goto   read_busy_flag              ;yes... request for 'Read Busy Flag and Address'?
 
-#ifdef INTERRUPT
+   ifndef INTERRUPT
+       goto uscita_interrupt
+   else
 
 uscita_interrupt                          
 
@@ -245,9 +248,7 @@ uscita_interrupt
        movwf  i2c_bit
        bcf    INTCON,INTF
        retfie 
-#else
-       goto uscita_interrupt
-#endif
+   endif
 
 command_receive_routine                    ;0xF6 = Command
 

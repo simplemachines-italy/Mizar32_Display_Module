@@ -18,7 +18,6 @@
 ; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
-; Comment it out or delete this line if you want the main-program version.
 
 ;INTERRUPT equ 1
 
@@ -185,7 +184,10 @@ uscita_interrupt
        movwf  i2c_bit
 
 wait_for_start
-	; Optionally, we could also check for seeing SCL high here.
+        ; SCL sill always be high for 4.7us before a start condition
+        ; so we could also check for SCL being high before SDA here,
+        ; assuming we always come back here at least 2us before every start
+        ; condition.
 
         if_low  sda
             goto wait_for_start

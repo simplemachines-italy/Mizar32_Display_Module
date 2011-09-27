@@ -129,28 +129,28 @@ select_tris_bank    macro
 
 ; conditionally execute the following single instruction
 
-if_low    macro    pin
-        btfss   i2c,pin     ; skip if high
+if_low    macro    addr,pin
+        btfss   addr,pin     ; skip if high
     endm
 
-if_high   macro    pin
-        btfsc   i2c,pin     ; skip if low
+if_high   macro    addr,pin
+        btfsc   addr,pin     ; skip if low
     endm
 
 
 ; Loop until a pin (sda/scl) is high/low
 
 ; Loop until a pin is high
-wait_for_high    macro    pin
+wait_for_high    macro    addr,pin
  L loop = $
-        if_low  pin
+        if_low  addr,pin
             goto loop
     endm
 
 ; Loop until a pin is low
-wait_for_low    macro    pin
+wait_for_low    macro    addr,pin
  L loop = $
-        if_high  pin
+        if_high  addr,pin
             goto loop
     endm
 
@@ -188,8 +188,8 @@ stop_clock_stretching    macro
 ; This assumes that the SDA pin is already configured as an input.
 
 roll_sda_into_lsb    macro    location
-        wait_for_low scl
-        wait_for_high scl
+        wait_for_low  i2c,scl
+        wait_for_high i2c,scl
         rrf     i2cport, w      ; roll SDA into C, throw away the rest
         rlf     location, f     ; roll C into the bottom of the register
     endm
@@ -203,11 +203,11 @@ roll_sda_into_lsb    macro    location
 ; and prepare for reception or sending of data.
 
 send_acknowledge_and_stretch    macro
-        wait_for_low  scl
+        wait_for_low  i2c,scl
         drive_low     sda
-        wait_for_high scl
+        wait_for_high i2c,scl
         ; keep ACK low for the duration of the high clock pulse
-        wait_for_low  scl
+        wait_for_low  i2c,scl
         start_clock_stretching
         release       sda
    endm
@@ -316,16 +316,16 @@ wait_for_start
         ; assuming we always come back here at least 2us before every start
         ; condition.
 
-        if_low  sda
+        if_low  i2c,sda
             goto wait_for_start
 start_seen_SDA          ; We've seen SDA high
-        if_low  scl
+        if_low  i2c,scl
             goto wait_for_start
                         ; We've seen SDA high, SCL high
-        if_high sda
+        if_high i2c,sda
             goto start_seen_SDA
                         ; We've seen SDA high, SCL high, SDA low
-        if_low  scl
+        if_low  i2c,scl
             goto wait_for_start
         ; START sequence complete
 

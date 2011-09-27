@@ -15,7 +15,7 @@ all: $(ALL)
 
 # Program the hex file to the board
 program: $(ALL)
-	picprog --device pic16f84a --burn --input $(ALL) --rdtsc
+	picprog --device pic16f84a --burn --erase --input $(ALL) --rdtsc
 
 # Rule to remove automatically-created files
 clean:

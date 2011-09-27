@@ -70,11 +70,6 @@ LCD_DB5         equ     1       ;LCD data line DB5
 LCD_DB6         equ     2       ;LCD data line DB6
 LCD_DB7         equ     3       ;LCD data line DB7
 
-EN_STROBE            MACRO
-                bsf  PORTB,LCD_E
-                bcf  PORTB,LCD_E
-                     ENDM
-
 sda           equ    0      ;PortB bit 0 is sda pin
 scl           equ    1      ;PortB bit 1 is scl pin
 i2c           equ    PORTB  ;
@@ -752,6 +747,11 @@ Delay1_53usLoop
 ; Initialize the LCD display
 ; This function must be called before any other function that drives the LCD
 ;**********************************************************************
+
+EN_STROBE            MACRO
+                bsf  PORTB,LCD_E
+                bcf  PORTB,LCD_E
+                     ENDM
 
 LcdInit
               ;bcf     PORTB,LCD_E     ;Lower the enable strobe

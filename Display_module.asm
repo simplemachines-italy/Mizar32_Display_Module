@@ -19,7 +19,7 @@
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
 
-INTERRUPT equ 1
+;INTERRUPT equ 1
 
 
 ; The bits of the I/O ports are assigned as follows:

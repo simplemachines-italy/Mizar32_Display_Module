@@ -19,7 +19,7 @@
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
 
-;INTERRUPT equ 1
+INTERRUPT equ 1
 
 
 ; The bits of the I/O ports are assigned as follows:
@@ -336,38 +336,40 @@ start_seen_SDA          ; We've seen SDA high
        btfsc  STATUS,C                    ;error on i2c communication?
        goto   uscita_interrupt            ;yes
 
-       movlw  0xF2
-       subwf  i2c_data,w
-       btfss  STATUS,C
+       ; See if this slave address is for us. We react to 7C-7F,
+       ; which we can check for by flipping the top bit and seeing
+       ; if the result is > FB
+
+       movf   i2c_data,w
+       xorlw  0x80
+       sublw  0xFB
+       btfsc  STATUS,C
        goto   uscita_interrupt
 
        call   send_ack
 
-       movlw  0xF6                        ;command?
+       movlw  0x7C                        ;command?
        subwf  i2c_data,0
-       
        btfsc  STATUS,Z             
        goto   command_receive_routine      ;yes... command
 
-       movlw  0xF2                        ;data?
+       movlw  0x7E                        ;data?
        subwf  i2c_data,0
-       
        btfsc  STATUS,Z             
        goto   data_receive_routine         ;yes... data
 
-       movlw  0xF7                        ;request switch condition?
+       movlw  0x7F                        ;request switch condition?
        subwf  i2c_data,0
-       
        btfsc  STATUS,Z             
        goto   request_switch_condition    ;yes... request switch condition
 
-       movlw  0xF3                        ;request for 'Read Busy Flag and Address'?
+       movlw  0x7D                        ;request for 'Read Busy Flag and Address'?
        subwf  i2c_data,0
-       
        btfsc  STATUS,Z             
        goto   read_busy_flag              ;yes... request for 'Read Busy Flag and Address'?
 
-       ; Oops, it wasn't for us. uscita_interrupt will release SCL again.
+       ; The program counter cannot arrive here if the above tests are correct.
+       ; However, if we do, just leave anyway.
 
    ifdef INTERRUPT
 

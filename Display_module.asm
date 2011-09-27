@@ -98,9 +98,12 @@ intflag              equ    4      ;0 = no interrupt occurred
 
 i2c_data             equ    0x13   ;Save location for i2c data byte.
 i2c_bit              equ    0x14   ;bit counter in i2c byte transfer
-nb_data              equ    0x17   ;Number of bytes read from I2C into buffer
+nb_data              equ    0x15   ;Number of bytes read from I2C into buffer
                                    ;and number of bytes left to write to LCD
-
+is_lcd_command       equ    0x16   ; Bit 0 says whether this was an I2C command
+                                   ; messsage.  If 0, it is a data message
+is_lcd_read          equ    0x17   ; Bit 0 is the read/write bit that follows
+                                   ; the 7-bit slave address
 start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
                                    ;buffer depth is 0x2c-0x4f, so we have 36
                                    ;bytes maximum (32 are used)
@@ -151,11 +154,123 @@ wait_for_low    macro    pin
             goto loop
     endm
 
+; Set an open collector output to actively drive a low value.
+; This assumes that the PORT bit is already programmed to 0, which should
+; be done in Start and never changed.
+; We always leave the bank select register pointing at the ports.
 
-;*******************************************************************************
-; Start of code
-;*******************************************************************************
+drive_low    macro    pin
+        select_tris_bank
+        bcf     i2ctris,pin
+        select_port_bank
+    endm
 
+release    macro    pin
+        select_tris_bank
+        bsf     i2ctris,pin
+        select_port_bank
+    endm
+
+; Pause the I2C bus and release it again
+
+start_clock_stretching    macro
+        drive_low scl
+    endm
+
+stop_clock_stretching    macro
+        release scl
+    endm
+
+; Roll the value on SDA into the least significant bit of a register.
+; This can be used to remember boolean flags, like R/W, where you will
+; just test bit 0.
+; It can also be used to assemble an 8-bit data byte during reception.
+; This assumes that the SDA pin is already configured as an input.
+
+roll_sda_into_lsb    macro    location
+        wait_for_low scl
+        wait_for_high scl
+        rrf     i2cport, w      ; roll SDA into C, throw away the rest
+        rlf     location, f     ; roll C into the bottom of the register
+    endm
+
+; We just received an address or data byte.
+; Send the acknowledgement and block the I2C bus while
+; It must be held low by the slave (us) within 3.45 us of the falling edge of
+; the 8th data clock pulse.
+;
+; There is some slack time in here which may be useful to decode the addresses
+; and prepare for reception or sending of data.
+
+send_acknowledge_and_stretch    macro
+        wait_for_low  scl
+        drive_low     sda
+        wait_for_high scl
+        ; keep ACK low for the duration of the high clock pulse
+        wait_for_low  scl
+        start_clock_stretching
+        release       sda
+   endm
+
+
+; In the I2C spec, the minimum time between SDA falling and SCL falling in a
+; START is 4us, which is slightly longer that the maximum interrupt latency of
+; 4 instruction cycles at 921600 ips.
+;
+; There are several options to get the best performance:
+;
+; Option 1)
+; Do everything in an interrupt routine triggered by falling SDA edge.
+;
+; We can check SCL in the first instruction of the interrupt routine.
+; The pin is sampled on the rising edge of the second oscillator cycle
+; of that instruction, which results in a maximum latency from SDA down
+; to checking SCL is high of 4 insns * 4 Tosc + Tosc = 17/3686400 seconds
+; which is 4.6115 us. This is outside the standard-speed I2C spec of 4us.
+; It also reacts to every SDA high-low transition in the data and generates
+; a lot of false STARTs because it only checks that SCL is high after the
+; falling edge of SDA, not that both SDA and SCL were high in the preceding
+; 4.7us.  There are almost certainly data sequences for other devices that
+; will match any addresses we may choose to use.
+;
+; One way to make this work within the I2C spec is to resign ourselves to not
+; always seeing the SCL high condition, and also allow an immediate SCL low,
+; which would be in the low clock period preceding the first data bit. This
+; extends the possible interrupt latency to 8.7us, which is OK for us.
+; However, this is even more prone to detecting false START conditions in
+; other devices' data.
+;
+; Option 2)
+; Do everything in a main loop and busy-wait to detect the START condition
+;
+; There are two ways to sample SDA and SCL.
+; The one with the highest sampling rate is to sample each one alternately
+; using a sequence of btfsc-goto pairs.  If the matching sequence for a
+; START is a linear sequence of code, not taking the branches, this samples
+; one pin every 2 instructions. At 3.686Mhz we have 921600 ips, each insn
+; takes 1.085us and our sampling rate is 2.17us.
+; SDA is guaranteed high for 4.7us before it goes low and SCL is high for
+; at least 4us after this, which garantees us at least two samples in each
+; of these intervals.
+; The looping branch that we do if these states last longer than 4.7us
+; extends one of the 2-insn intervals to 3 insn.
+;
+; Sampling them alternately, we look to match the sequence:
+; { SDA-hi then SCL-hi } one or more times
+; followed by SDA-low
+; followed by SCL-high
+; This completes the start condition (done by macro wait_for_start)
+; The calling code should then wait for SCL-low, then wait for SCL-high
+; then sample the first bit of the slave address
+
+
+;******************************************************************************
+; Main code section starts
+;******************************************************************************
+
+; In interrupt mode, the main program just initialises then loops forever
+; and all work is doen in the SDA falling edge interrupt routine.
+; In non-interrupt mode we busy-wait for the START condition, do stuff and loop.
 
     ifdef INTERRUPT
 
@@ -165,22 +280,25 @@ wait_for_low    macro    pin
        call   init_interrupt
        goto   $                ; do nothing forever
 
+
        org    0x0004   ; Interrupt routine
 
-;If we are here, sda pin has gone low. Look for scl pin; If scl=1 a start 
-;condition is TRUE
+       ; If we are here, sda pin has gone low. Look for scl pin;
+       ; If scl=1 a start condition is TRUE
 
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
 
    else
 
-       ORG    0x0000
+       org    0x0000
 
        call   initialize
        goto   wait_for_start
 
-; When we fail, instead of leaving the interrupt routine, we come back here,
+; In the version without an interrupt routine, instead of leaving the
+; interrupt routine, we come back here, reinitialise and wait for a START.
+
 uscita_interrupt
        ; Ensure that clock stretching is undone and that SDA is not held low
        bsf    STATUS,RP0           ;select bank 1

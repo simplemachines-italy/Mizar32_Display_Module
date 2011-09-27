@@ -173,10 +173,16 @@ wait_for_low    macro    pin
        goto   wait_for_start
 
 ; When we fail, instead of leaving the interrupt routine, we come back here,
-; reset the dirtied variables and wait for another start condition.
 uscita_interrupt
+       ; Ensure that clock stretching is undone and that SDA is not held low
+       bsf    STATUS,RP0           ;select bank 1
+       bsf    TRISB,scl            ;Release scl line
+       bsf    TRISB,sda            ;Release SDA line too
+       bcf    STATUS,RP0           ;select bank 0
+       ; reset the dirtied variables
        movlw  8
        movwf  i2c_bit
+       ; and wait for another start condition
 
 wait_for_start
         ; SCL sill always be high for 4.7us before a start condition
@@ -235,16 +241,24 @@ start_seen_SDA          ; We've seen SDA high
        btfsc  STATUS,Z             
        goto   read_busy_flag              ;yes... request for 'Read Busy Flag and Address'?
 
-   ifndef INTERRUPT
-       goto uscita_interrupt
-   else
+       ; Oops, it wasn't for us. uscita_interrupt will release SCL again.
+
+   ifdef INTERRUPT
 
 uscita_interrupt                          
+
+       ; Oops, it wasn't for us.  Relese the SCL line, put low by send_ack
+       bsf    STATUS,RP0           ;select bank 1
+       bsf    TRISB,scl            ;Release scl line
+       bsf    TRISB,sda            ;Release SDA line too
+       bcf    STATUS,RP0           ;select bank 0
 
        movlw  8
        movwf  i2c_bit
        bcf    INTCON,INTF
        retfie 
+   else
+       goto uscita_interrupt
    endif
 
 command_receive_routine                    ;0xF6 = Command

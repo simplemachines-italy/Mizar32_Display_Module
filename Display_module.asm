@@ -74,6 +74,14 @@ sda           equ    0      ;PortB bit 0 is sda pin
 scl           equ    1      ;PortB bit 1 is scl pin
 i2c           equ    PORTB  ;
 
+; Bit values returned by the button-reading code
+button_LEFT   equ    2
+button_RIGHT  equ    4
+button_UP     equ    8
+button_DOWN   equ    16
+button_SELECT equ    32
+
+
 ;Used PIC memory ORG 0x0C
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
@@ -335,35 +343,104 @@ send_istruction
        goto   send_istruction
        goto   uscita_interrupt
 
+; The buttons are connected as follows
+;
+;          RB5
+;          / \
+;         L   U
+;        /     \
+;      RA4     RB7
+;        \     /
+;         R   D
+;          \ /
+;          RB6
+;           |
+;           S
+;           |
+;          GND
+;
+; where R[AB]X are port pins and L R U D S are the buttons.
+; There is a 10K pull-up resistor on the RB pins.
+;
+; SELECT is easy to test: set all pins as (high) inputs and test if RB6 is low.
+;
+; We can also detect any combination of two of L R U and D being held,
+; whether or not SELECT is held or not:
+;
+; RIGHT and DOWN can be checked by setting RB6 as a low output and testing
+; RA4 and RB7.  If SELECT is also pressed, this makes no difference as we are
+; already holding RB6 low.
+;
+; LEFT and UP are more tricky because if SELECT and RIGHT are held,
+; RA4 will be low anyway. So we can hold RA4 low and test RB5,
+; then hold RB7 low and test RB5.
+; However, this gives a false positive on LEFT if S, D and U are held
+; and a similar false U if S L and R are held. We get round this
+; by testing L and U "in both directions".
+;
+; The only case we cannot detect is if three of L u R and D are held
+; since this short-circuits the fourth button at an electrical level,
+; so it looks like all four buttons are held.
+
 request_switch_condition           ;0xF7
 
        bcf    STATUS,RP0    ;Select bank of memory 0
+       clrf   PORTB         ; Ensure all RB lines will output 0
+       clrf   PORTA         ; Ensure RA4 will output 0.
+
+       ; TRIS bits should already be set with all four lines an inputs.
 
        movlw    0   ; no buttons pressed yet...
+
        ; Check SELECT switch with all lines as inputs
        btfss  PORTB,6
-       iorlw  32
+       iorlw  button_SELECT
+
        ; Check RIGHT and DOWN by setting RB6 as a low output
-       bcf    PORTB,6   
        bsf    STATUS,RP0 ; access tris
        bcf    TRISB,6
        bcf    STATUS,RP0 ; access ports
        btfss  PORTA,4  ; RIGHT?
-       iorlw  4
+       iorlw  button_RIGHT
        btfss  PORTB,7 ; DOWN?
-       iorlw  16
-       ; Check LEFT and UP by setting RB5 as a low output
-       bcf    PORTB,5
+       iorlw  button_DOWN
+
+       ; Check LEFT by setting RA4 as a low output and testing RB5
        bsf    STATUS,RP0 ; access tris
        bsf    TRISB,6         ; RB6 is an input again
+       bcf    TRISA,4         ; RA4 is a low output
+       bcf    STATUS,RP0 ; access ports
+       btfsc  PORTB,5        ; LEFT?
+       goto   left_button_not_held
+       ; now check the other way
+       bsf    STATUS,RP0 ; access tris
+       bsf    TRISA,4         ; RA4 is an input again
        bcf    TRISB,5         ; RB5 is a low output
        bcf    STATUS,RP0 ; access ports
-       btfss  PORTA,4       ; LEFT?
-       iorlw  2
-       btfss  PORTB,7       ; UP?
-       iorlw  8
-       ; Set RB5 back to an input
+       btfss  PORTA,4        ; LEFT?
+       iorlw  button_LEFT
+left_button_not_held
+
+       ; Check UP by setting RB7 low and testing RB5
+       bsf    STATUS,RP0 ; access tris
+       bsf    TRISA,4         ; RA4 is an input again
+       bsf    TRISB,5         ; RB5 is an input again
+       bcf    TRISB,7         ; RB7 is a low output
+       bcf    STATUS,RP0 ; access ports
+       btfsc  PORTB,5        ; UP?
+       goto up_button_not_held
+       ; now check the other way
+       bsf    STATUS,RP0 ; access tris
+       bsf    TRISB,7         ; RB7 is an input again
+       bcf    TRISB,5         ; RB5 is a low output
+       bcf    STATUS,RP0 ; access ports
+       btfss  PORTB,7        ; UP?
+       iorlw  button_UP
+up_button_not_held
+
+       ; Set UP pins back to inputs
        bsf    STATUS,RP0
+       bsf    TRISB,7
        bsf    TRISB,5
        bcf    STATUS,RP0
 

@@ -631,18 +631,18 @@ send_bit
 send_bit_scl_is_low
 
        clrf   time_out      ;try 256 times before declaring i2c time out
-       rlf    i2c_data,f
+
        bsf    STATUS,RP0           ;select bank 1
-       btfsc  STATUS, C            ;Test the carry bit
-       bsf    TRISB,sda            ;Output high (open collector) if C = 1
-       btfss  STATUS, C            ;Test the carry bit
-       bcf    TRISB,sda            ;Output low if C = 0
-       bsf    TRISB,scl            ;Release scl line
+       bsf    TRISB,sda            ; Go open-collector for high output
+       btfss  i2c_data,7           ; see if data bit to output is 0
+       bcf    TRISB,sda            ; Output low if so
+       bsf    TRISB,scl            ; Release the SCL line
        bcf    STATUS,RP0           ;select bank 0
 
-       decfsz i2c_bit,f
-       goto   send_waiting_for_scl_up
-       goto   end_send_i2c
+       rlf    i2c_data,f	   ; discard tha bit
+       decfsz i2c_bit,f		   ; decrease bit count
+       goto   send_waiting_for_scl_up  ; if > 0, send another bit
+       goto   end_send_i2c	   ; if == 0, all 8 bits have been sent
 
 send_waiting_for_scl_up
 

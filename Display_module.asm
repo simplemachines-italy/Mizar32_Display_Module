@@ -631,7 +631,7 @@ send_another_bit
 
        ; hold the clock again
        bsf    STATUS,RP0           ;select bank 1
-       bcf    TRISB,scl            ; Release the SCL line
+       bcf    TRISB,scl            ; Hold the SCL line again
        bcf    STATUS,RP0           ;select bank 0
 
        rlf    i2c_data,f	   ; discard tha bit

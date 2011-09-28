@@ -161,7 +161,6 @@ wait_for_low    macro    addr,pin
 ; We always leave the bank select register pointing at the ports.
 
 drive_low    macro    addr,pin
-        ;bcf     addr,pin	; make sure the bit is 0
         select_tris_bank
         bcf     addr,pin
         select_port_bank
@@ -226,12 +225,6 @@ unstretch    macro
 ; of these intervals.
 ; If one of these states lasts longer than 4.7us, the looping branch
 ; extends one of the 2-insn intervals to 3 insns.
-;
-; Sampling them alternately, we look to match the sequence:
-; { SDA-hi then SCL-hi } one or more times
-; followed by SDA-low
-; followed by SCL-high
-; This completes the start condition and is done by wait_for_start.
 
 
 ;******************************************************************************
@@ -270,26 +263,28 @@ unstretch    macro
 ; interrupt routine, we come back here, reinitialise and wait for a START.
 
 uscita_interrupt
+       ; Reset the dirtied variables
+       movlw  0x08
+       movwf  i2c_bit
+
        ; Ensure that clock stretching is undone and that SDA is not held low
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,sda            ;Release SDA line
        bsf    TRISB,scl            ;Release SCL line
        bcf    STATUS,RP0           ;select bank 0
-       ; reset the dirtied variables
-       movlw  0x08
-       movwf  i2c_bit
+
        ; and wait for another start condition
 
 wait_for_start
-        ; SCL sill always be high for 4.7us before a start condition
+        ; SCL will always be high for 4.7us before a start condition
         ; so we could also check for SCL being high before SDA here,
         ; assuming we always come back here at least 2us before every start
         ; condition.
 
-; Sampling them alternately, we look to match the sequence:
-; { SDA-hi then SCL-hi } one or more times
-; followed by SDA-low
-; followed by SCL-high
+	; Sampling them alternately, we look to match the sequence:
+	; { SDA-hi then SCL-hi } one or more times
+	; followed by SDA-low
+	; followed by SCL-high
 
         if_low  i2c,sda
             goto wait_for_start
@@ -399,14 +394,16 @@ i2c_read_commands
 
 uscita_interrupt                          
 
-       ; Release the SCL line, put low by send_ack
-       bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,scl            ;Release scl line
-       bsf    TRISB,sda            ;Release SDA line too
-       bcf    STATUS,RP0           ;select bank 0
-
+       ; reinitialize the static variables
        movlw  8
        movwf  i2c_bit
+
+       ; Release the SCL line, put low by send_ack
+       bsf    STATUS,RP0           ;select bank 1
+       bsf    TRISB,sda            ;Release SDA line too
+       bsf    TRISB,scl            ;Release scl line
+       bcf    STATUS,RP0           ;select bank 0
+
 rti			; fast exit, for when we have modified nothing
        bcf    INTCON,INTF
        retfie 
@@ -621,7 +618,7 @@ waiting_for_first_send
 
 send_bit
 
-       bcf    i2c,scl       ;Put SCL line low for clock stretching
+       ; clock stretching
        bsf    STATUS,RP0    ;select bank 1
        bcf    TRISB,scl     ;Hold low scl line
        bcf    STATUS,RP0    ;select bank 0
@@ -630,7 +627,6 @@ send_bit_scl_is_low
 
        clrf   time_out      ;try 256 times before declaring i2c time out
        rlf    i2c_data,f
-       bcf    i2c,sda
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,sda            ;Prepare if C = 1
        btfss  STATUS, C            ;Test the carry bit
@@ -746,7 +742,6 @@ i2c_error
 send_ack_without_clk_down
 
        clrf   time_out
-       bcf    i2c,sda       ;prepare pin sda to send ack
 
 recheck_scl_pin1
 
@@ -799,7 +794,6 @@ check_time_out21
 send_ack
 
        clrf   time_out
-       bcf    i2c,sda       ;prepare pin sda to send ack
        
 recheck_scl_pin
 
@@ -824,7 +818,6 @@ recheck_scl_pin_2
        btfsc  i2c,scl       ;if scl=0 the ack bit is sent
        goto   check_time_out2
 
-       bcf    i2c,scl       ;force scl low for clock stretching
        bsf    STATUS,RP0    ;select bank 1
        bsf    TRISB,sda     ;set pin sda as input
        bcf    TRISB,scl     ;scl as output for clock stretching

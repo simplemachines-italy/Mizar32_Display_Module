@@ -22,40 +22,50 @@
 ;INTERRUPT equ 1
 
 
-; The bits of the I/O ports are assigned as follows:
-; PORTA
-; 7 6 5 4 3 2 1 0
-; X X X | | | | |_ LCD_DB4 (Output)
-;       | | | |___ LCD_DB5 (Output)
-;       | | |_____ LCD_DB6 (Output)
-;       | |_______ LCD_DB7 (Output)
-;       |_________ Buttons LEFT/RIGHT (OC)
-; PORTB
-; 7 6 5 4 3 2 1 0
-; | | | | | | | |_ SDA (OC)
-; | | | | | | |___ SCL (OC)
-; | | | | | |_____ LCD_RS (Output: 0=command, 1=data)
-; | | | | |_______ LCD_RW (Output: 0=write command/data, 1=read busy flag/data
-; | | | |_________ LCD_E  (Output: Strobe high for 250ns to read/write
-; | | |___________ Buttons LEFT/UP (OC)
-; | |_____________ Buttons RIGHT/DOWN/SELECT (OC)
-; |_______________ Buttons UP/DOWN (OC)
+; The I/O port pins are connected to the following things
+; and their data direction registers' contents are normally:
 ;
-; X = any value
+; Pin no 7 6 5 4 3 2 1 0
+; PORTA  ? ? ? 0 ? ? ? ?
+;        X X X | | | | |_ LCD_DB4 (Output)
+;              | | | |___ LCD_DB5 (Output)
+;              | | |_____ LCD_DB6 (Output)
+;              | |_______ LCD_DB7 (Output)
+;              |_________ Buttons LEFT/RIGHT (OC)
+;
+; Pin no 7 6 5 4 3 2 1 0
+; PORTB  0 0 0 ? ? ? 0 0
+;        | | | | | | | |_ SDA (OC)
+;        | | | | | | |___ SCL (OC)
+;        | | | | | |_____ LCD_RS (Output: 0=command, 1=data)
+;        | | | | |_______ LCD_RW (Output: 0=write to LCD, 1=read from LCD
+;        | | | |_________ LCD_E  (Output: Strobe high for 250ns to read/write
+;        | | |___________ Buttons LEFT/UP (OC)
+;        | |_____________ Buttons RIGHT/DOWN/SELECT (OC)
+;        |_______________ Buttons UP/DOWN (OC)
+;
+; X  = not connected
 ; OC = Open collector output: driven low or left as an input to float high
+; ?  = Can have different values at different times
 ;
-; The OC pins must always have output value 0 and are switched using TRIS bits.
-; Attempts to set/clear bits in the ports using bcf/bsf are dangerous because
-; they do read-modify-write: if an OC bit is not driven at that moment and
-; is floating high, the bit read and written by bcf/bsf is the current input
-; value on that pin, which risks making it a high output when code switches it
-; to its low open-collector function.
+; Attempts to set/clear bits in the ports using bcf/bsf are hazardous because
+; they do read-modify-write: if an OC pin is an input at the moment in which
+; some other bit is set or cleared by bcf/bsf, the OC pin output latch value
+; is written as the pin's current input value, which may change it from the
+; 0 required to manage OC pins efficiently.  If some OC pin code forgets to
+; reset the pin's output value to 0 every time it works it,
+; you risk making it a driven high output, which may physically damage it
+; and/or the I/O pin of anoher device on the I2C bus.
 ;
 ; One option is always to set OC pins low before enabling them as outputs.
+; The current code should always do that.
 ; Another is to be sure only ever to write 0 into their PORT bits and never
-; use bcf/bsf on PORTs.
-; The TRIS bits, instead, can be set/cleared using bcf/bcf, since the value
-; read from them always reflects the content that was last written to them.
+; use bcf/bsf on PORTs - this requires a code review.
+;
+; It's OK to set and clear TRIS bits using bcf/bcf, since the value read from
+; theme registers always reflects the value that was last programmed to them.
+
+; Here are some definitions for the bit numbers of some of those pins.
 
 ;LCD control lines on PORTB
 
@@ -65,14 +75,14 @@ LCD_E           equ     4       ;Lcd Enable on port portb
 
 ;LCD data lines on PORTA
 
-LCD_DB4         equ     0       ;LCD data line DB4
-LCD_DB5         equ     1       ;LCD data line DB5
-LCD_DB6         equ     2       ;LCD data line DB6
-LCD_DB7         equ     3       ;LCD data line DB7
+LCD_DB4         equ     0       ;LCD data line DB4 is on PA0
+LCD_DB5         equ     1       ;LCD data line DB5 is on PA1
+LCD_DB6         equ     2       ;LCD data line DB6 is on PA2
+LCD_DB7         equ     3       ;LCD data line DB7 is on PA3
 
+i2c           equ    PORTB  ;Which port are the sda/scl bits on?
 sda           equ    0      ;PortB bit 0 is sda pin
 scl           equ    1      ;PortB bit 1 is scl pin
-i2c           equ    PORTB  ;
 
 ; Bit values returned by the button-reading code
 button_LEFT   equ    2
@@ -834,6 +844,16 @@ check_time_out2
 
 initialize
 
+; XXX!
+; TRISA bits 0-3, the LCD data lines, are normally set as outputs, since we
+; usually only ever write commands and data to the LCD.
+; This code here initializes the PORTA data pins to 0xF, which drives all the
+; LCD data pins high.
+; Then the PORTB LCD control bits (E, R/W, RS) are set to 111, which is a
+; read-data command to the LCD which makes it drive its data pins as outputs
+; as well.
+; Doesn't this risk damaging either or both of the devices?
+
        movlw  0xEF
        movwf  PORTA         ;Init PortA all out and all High for correct
                             ;start LCD. Only RA4 must be low when in out mode
@@ -859,8 +879,9 @@ initialize
        call   LcdInit       ;Init LCD
        call   LcdClear      ;and clear
 
-       ; Pre-initialize the registers used in the interrupt routine
-       ; so that it can respond more quickly
+       ; Pre-initialize the registers used when receiving data
+       ; so that the receiving code can respond more quickly
+
 
        movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
@@ -959,10 +980,15 @@ Delay1_53usLoop
 ; This function must be called before any other function that drives the LCD
 ;**********************************************************************
 
+; First, a nice macro to strobe the LCD to make it read or write the current
+; command or data
+
 EN_STROBE            MACRO
                 bsf  PORTB,LCD_E
                 bcf  PORTB,LCD_E
                      ENDM
+
+; Reset the LCD
 
 LcdInit
               ;bcf     PORTB,LCD_E     ;Lower the enable strobe
@@ -974,6 +1000,11 @@ LcdInit
               call    msDelay
 
               ; Send the reset sequence to the LCD
+
+              ; These three STROBEs always leave the LCD in 8-bit mode,
+	      ; whether it was in 4-bit or 8-bit mode previously, and also
+              ; if it was in 4-bit mode and had received only one of a pair of
+              ; 4-bit nybbles.
 
               movlw   00000011B
               movwf   PORTA
@@ -989,23 +1020,30 @@ LcdInit
 
 ;--------------------------------
 
+	      ; this sets the LCD to 4-bit mode
+	      ; one line of text, 5x8 character set
+	      ; (command 00100000, since PA0-3 = DB4-7 and DB0-3 = =GND
+
               movlw   00000010B
               movwf   PORTA
 
               EN_STROBE
               call    Delay39us
 
-              ;Configure the data bus to 4 bits
+              ; Configure the data bus to 4-bit mode,
+	      ; *TWO* lines of text, 5x8 character set
 
               movlw   0x28
               call    LcdSendCommand
 
-              ;Entry mode set, increment, no shift
+              ; Entry mode set:
+	      ; Increment (move cursor left-to-right
+	      ; Move the cursor, don't shift the display
 
               movlw   0x06
               call    LcdSendCommand
 
-              ;Display ON, Curson OFF, Blink OFF
+              ; Display ON, Curson OFF, Blink OFF
 
               movlw   0x0C
               call    LcdSendCommand

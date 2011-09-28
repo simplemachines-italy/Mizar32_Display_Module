@@ -21,6 +21,12 @@
 
 ;INTERRUPT equ 1
 
+; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
+; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher I2C
+; clock rates at present.
+
+STRETCH_ON_SEND equ 1
+
 
 ; The bits of the I/O ports are assigned as follows:
 ; PORTA
@@ -615,6 +621,27 @@ here1
 
 i2c_send_byte
 
+   ; We have two algorithms for sending data. One stretches the clock at
+   ; every bit; the other just runs as fast as it can.
+   ; Neither succeeds in respecting the I2C spec for a 100kHz system,
+   ; but the clock-stretching one is more successful.
+
+   ifdef STRETCH_ON_SEND
+
+   ; This version stretches the low half of the clock on every clock pulse
+   ; The critical times is from releasing the clock to holding it again,
+   ; If the clock goes high when released, this happens 125ns after the end
+   ; of the "bsf scl" insn. We detect that it is high within 2 insns (2us),
+   ; which is 2.17us, well within the the minimum of 4us.
+   ;
+   ; We then have to hold the clock low within 4.7us of the clock going low.
+   ; For this, the worst case is when we sample the last moment of the high part
+   ; of the clock. It then takes us 3 insn cycles to sample it again, and
+   ;   bsf scl; nop; bsf RP0; bcf scl;
+   ; to get it low again, which is
+   ; 6.75 * 1.085us + 125ns = 7.45us, much longer than the ~ 4.7us we have.
+   ; (I can't find a figure to say what the setup time is for a clock stretch)
+
 send_another_bit
 
        ; output a bit
@@ -637,6 +664,61 @@ send_another_bit
        rlf    i2c_data,f	   ; discard tha bit
        decfsz i2c_bit,f		   ; decrease bit count
        goto   send_another_bit
+
+   else
+
+   ; This version just runs as fast as it can, hoping to keep up with the clock.
+   ; The critical time is from detecting SCL low to getting SDA high or low.
+   ; SCL is sampled on the falling edge of the first Fosc clock pulse of the
+   ; first insn of wait_for_low, so the delay is:
+   ;   3/4 of btfsx (high SDA); goto taken (2 insn cycles); btfsx (low SDA);
+   ;   nop(goto); bsf STATUS; bsf TRISB; btfss i2c_data; bcf TRISB
+   ; and the output is valid 125ns after the first rising edge of the next insn.
+   ; Total delay is 8.75*1.085us + 125ns = 9.62us,  which is twice the maximum 
+   ; of t(LOW)- t(SU:DAT) = 4.7us - 250ns = 4.45us.
+  
+
+       ; The first bit is different because we have to release SCL when we
+       ; have set the right value on SDA.  For the other 7 bits we just run
+       ; as fast as we can. This takes 6 or 7 instructions maximum from
+       ; detecting SCL low to getting the data on SDA.
+
+       ; output bit 7
+       bsf    STATUS,RP0           ;select bank 1
+       btfsc  i2c_data,7           ; See if data bit to output is 1
+       bsf    TRISB,sda            ; Go open-collector for high output if so
+       btfss  i2c_data,7           ; See if data bit to output is 0
+       bcf    TRISB,sda            ; Output low if so
+       bsf    TRISB,scl            ; Release the SCL line
+       bcf    STATUS,RP0           ;select bank 0
+       
+       wait_for_high  i2c,scl
+       wait_for_low   i2c,scl
+
+i2c_send_bit    macro   bit        
+       bsf    STATUS,RP0           ;select bank 1
+       bsf    TRISB,sda            ; Go open-collector for high output
+       btfss  i2c_data,bit         ; See if data bit to output is 0
+       bcf    TRISB,sda            ; Output low if so
+       bcf    STATUS,RP0           ;select bank 0
+       wait_for_high  i2c,scl
+       wait_for_low   i2c,scl
+   endm
+       
+       i2c_send_bit 6
+       i2c_send_bit 5
+       i2c_send_bit 4
+       i2c_send_bit 3
+       i2c_send_bit 2
+       i2c_send_bit 1
+       i2c_send_bit 0
+       
+       ; hold the clock again
+       bsf    STATUS,RP0           ;select bank 1
+       bcf    TRISB,scl            ; Hold the SCL line again
+       bcf    STATUS,RP0           ;select bank 0
+
+   endif
 
        bcf    STATUS,C      ;communication ok
 

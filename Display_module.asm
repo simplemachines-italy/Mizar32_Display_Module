@@ -112,7 +112,7 @@ nb_data              equ    0x15   ;Number of bytes read from I2C into buffer
                                    ;and number of bytes left to write to LCD
 is_lcd_command       equ    0x16   ; Bit 0 says whether this was an I2C command
                                    ; messsage.  If 0, it is a data message
-is_lcd_read          equ    0x17   ; Bit 0 is the read/write bit that follows
+is_i2c_read_command  equ    0x17   ; Bit 0 is the read/write bit that follows
                                    ; the 7-bit slave address
 start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
                                    ;buffer depth is 0x2c-0x4f, so we have 36
@@ -169,58 +169,28 @@ wait_for_low    macro    addr,pin
 ; be done in Start and never changed.
 ; We always leave the bank select register pointing at the ports.
 
-drive_low    macro    pin
+drive_low    macro    addr,pin
         select_tris_bank
-        bcf     i2ctris,pin
+        bcf     addr,pin
         select_port_bank
     endm
 
-release    macro    pin
+release    macro    addr,pin
         select_tris_bank
-        bsf     i2ctris,pin
+        bsf     addr,pin
         select_port_bank
     endm
 
-; Pause the I2C bus and release it again
 
-start_clock_stretching    macro
-        drive_low scl
+; Stretch the clock, and stop doing so.
+
+stretch    macro
+        drive_low i2c,scl
     endm
 
-stop_clock_stretching    macro
-        release scl
+unstretch    macro
+        release   i2c,scl
     endm
-
-; Roll the value on SDA into the least significant bit of a register.
-; This can be used to remember boolean flags, like R/W, where you will
-; just test bit 0.
-; It can also be used to assemble an 8-bit data byte during reception.
-; This assumes that the SDA pin is already configured as an input.
-
-roll_sda_into_lsb    macro    location
-        wait_for_low  i2c,scl
-        wait_for_high i2c,scl
-        rrf     i2cport, w      ; roll SDA into C, throw away the rest
-        rlf     location, f     ; roll C into the bottom of the register
-    endm
-
-; We just received an address or data byte.
-; Send the acknowledgement and block the I2C bus while
-; It must be held low by the slave (us) within 3.45 us of the falling edge of
-; the 8th data clock pulse.
-;
-; There is some slack time in here which may be useful to decode the addresses
-; and prepare for reception or sending of data.
-
-send_acknowledge_and_stretch    macro
-        wait_for_low  i2c,scl
-        drive_low     sda
-        wait_for_high i2c,scl
-        ; keep ACK low for the duration of the high clock pulse
-        wait_for_low  i2c,scl
-        start_clock_stretching
-        release       sda
-   endm
 
 
 ; In the I2C spec, the minimum time between SDA falling and SCL falling in a
@@ -260,18 +230,16 @@ send_acknowledge_and_stretch    macro
 ; one pin every 2 instructions. At 3.686Mhz we have 921600 ips, each insn
 ; takes 1.085us and our sampling rate is 2.17us.
 ; SDA is guaranteed high for 4.7us before it goes low and SCL is high for
-; at least 4us after this, which garantees us at least two samples in each
+; at least 4us after this, which guarantees us at least two samples in each
 ; of these intervals.
-; The looping branch that we do if these states last longer than 4.7us
-; extends one of the 2-insn intervals to 3 insn.
+; If one of these states lasts longer than 4.7us, the looping branch
+; extends one of the 2-insn intervals to 3 insns.
 ;
 ; Sampling them alternately, we look to match the sequence:
 ; { SDA-hi then SCL-hi } one or more times
 ; followed by SDA-low
 ; followed by SCL-high
-; This completes the start condition (done by macro wait_for_start)
-; The calling code should then wait for SCL-low, then wait for SCL-high
-; then sample the first bit of the slave address
+; This completes the start condition and is done by wait_for_start.
 
 
 ;******************************************************************************
@@ -312,11 +280,11 @@ send_acknowledge_and_stretch    macro
 uscita_interrupt
        ; Ensure that clock stretching is undone and that SDA is not held low
        bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,scl            ;Release scl line
-       bsf    TRISB,sda            ;Release SDA line too
+       bsf    TRISB,sda            ;Release SDA line
+       bsf    TRISB,scl            ;Release SCL line
        bcf    STATUS,RP0           ;select bank 0
        ; reset the dirtied variables
-       movlw  8
+       movlw  0x08
        movwf  i2c_bit
        ; and wait for another start condition
 
@@ -325,6 +293,11 @@ wait_for_start
         ; so we could also check for SCL being high before SDA here,
         ; assuming we always come back here at least 2us before every start
         ; condition.
+
+; Sampling them alternately, we look to match the sequence:
+; { SDA-hi then SCL-hi } one or more times
+; followed by SDA-low
+; followed by SCL-high
 
         if_low  i2c,sda
             goto wait_for_start
@@ -341,51 +314,100 @@ start_seen_SDA          ; We've seen SDA high
 
    endif
 
-       call   start_bit_ok  
+; After a start bit, instead of reading a bytes of slave address and thinking
+; about it, we do address-matching on each bit as they are received.
+; This lets us react at 100kHz instead of 15kHz.
 
-       btfsc  STATUS,C                    ;error on i2c communication?
-       goto   uscita_interrupt            ;yes
+; Read an data bit from the I2C stream and compare it against the "bit"th
+; bit in the given slave address. If it doesn't match, jump to "on_mismatch"
+; While matching, this takes 2 instruction cycles after the clock goes high.
 
-       ; See if this slave address is for us. We react to 7C-7F,
-       ; which we can check for by flipping the top bit and seeing
-       ; if the result is > FB
 
-       movf   i2c_data,w
-       xorlw  0x80
-       sublw  0xFB
-       btfsc  STATUS,C
-       goto   uscita_interrupt
+match_address_bit    macro    addr, bit
+        wait_for_low   i2c,scl
+        wait_for_high  i2c,scl
+        if (addr & (1 << bit))
+            ; continue if the bit is one
+            btfss   i2c,sda
+        else
+            ; (addr & (1<<bit)) == 0, so sda should be zero too.
+            ; Continue if the bit is zero
+            btfsc   i2c,sda
+        endif
+     ifdef INTERRUPT
+	goto rti
+     else
+        goto wait_for_start
+     endif
+   endm
 
-       call   send_ack
+; Roll the value on SDA into the least significant bit of a register.
+; This can be used to remember boolean flags, like R/W, where you will
+; just test bit 0.
+; It can also be used to assemble an 8-bit data byte during reception.
+; This assumes that the SDA pin is already configured as an input.
 
-       movlw  0x7C                        ;command?
-       subwf  i2c_data,0
-       btfsc  STATUS,Z             
-       goto   command_receive_routine      ;yes... command
+roll_sda_into_lsb    macro    location
+        wait_for_low  i2c,scl
+        wait_for_high i2c,scl
+        rrf     i2c, w          ; roll SDA into C, throw away the rest
+        rlf     location, f     ; roll C into the bottom of the register
+    endm
 
-       movlw  0x7E                        ;data?
-       subwf  i2c_data,0
-       btfsc  STATUS,Z             
-       goto   data_receive_routine         ;yes... data
+; Send the acknowledgement and block the I2C bus while we process it.
+; To successfully stretch the clock, the slave must hold SCL low within
+; 3.45us of the falling edge of the 8th data clock pulse.
+;
+; There is some slack time here.
 
-       movlw  0x7F                        ;request switch condition?
-       subwf  i2c_data,0
-       btfsc  STATUS,Z             
-       goto   request_switch_condition    ;yes... request switch condition
+send_acknowledge_and_stretch    macro
+        wait_for_low  i2c,scl
+        drive_low     i2c,sda
+        wait_for_high i2c,scl
+        ; keep ACK low for the entire duration of the high clock pulse
+        wait_for_low  i2c,scl
 
-       movlw  0x7D                        ;request for 'Read Busy Flag and Address'?
-       subwf  i2c_data,0
-       btfsc  STATUS,Z             
-       goto   read_busy_flag              ;yes... request for 'Read Busy Flag and Address'?
+        select_tris_bank
+        bcf     i2c,scl		; stretch the clock
+        bsf     i2c,sda		; release SDA
+        select_port_bank
+   endm
 
-       ; The program counter cannot arrive here if the above tests are correct.
-       ; However, if we do, just leave anyway.
+our_address = 0xFC		; The first of our four 8-bit slave addresses
+
+        ; The top 6 bits of the slave address should match out address;
+        ; These are followed by whether this is a command or data and
+        ; whether it is an I2C read or write command.
+        match_address_bit  our_address, 7
+        match_address_bit  our_address, 6
+        match_address_bit  our_address, 5
+        match_address_bit  our_address, 4
+        match_address_bit  our_address, 3
+        match_address_bit  our_address, 2
+        ; save the command/data bit of the slave address and the R/W flag
+        roll_sda_into_lsb  is_lcd_command
+        roll_sda_into_lsb  is_i2c_read_command
+        send_acknowledge_and_stretch
+
+	; See whether we should read the I2C bus or write to it
+	if_high  is_i2c_read_command,0
+	    goto  i2c_read_commands
+	
+	; Commands to receive data from i2c and do something with it
+	if_low  is_lcd_command,0
+	   goto  data_receive_routine
+        goto  command_receive_routine
+
+i2c_read_commands
+	if_low  is_lcd_command,0
+	   goto  request_switch_condition
+        goto  read_busy_flag
 
    ifdef INTERRUPT
 
 uscita_interrupt                          
 
-       ; Oops, it wasn't for us.  Relese the SCL line, put low by send_ack
+       ; Release the SCL line, put low by send_ack
        bsf    STATUS,RP0           ;select bank 1
        bsf    TRISB,scl            ;Release scl line
        bsf    TRISB,sda            ;Release SDA line too
@@ -393,10 +415,11 @@ uscita_interrupt
 
        movlw  8
        movwf  i2c_bit
+rti			; fast exit, for when we have modified nothing
        bcf    INTCON,INTF
        retfie 
    else
-       goto uscita_interrupt
+       goto uscita_interrupt	; the main-program version of the same thing
    endif
 
 command_receive_routine                    ;0xF6 = Command

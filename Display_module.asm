@@ -281,7 +281,7 @@ wait_for_start
         ; assuming we always come back here at least 2us before every start
         ; condition.
 
-	; Sampling them alternately, we look to match the sequence:
+	; Sampling SCL and SDA alternately, we look to match the sequence:
 	; { SDA-hi then SCL-hi } one or more times
 	; followed by SDA-low
 	; followed by SCL-high
@@ -297,7 +297,12 @@ start_seen_SDA          ; We've seen SDA high
                         ; We've seen SDA high, SCL high, SDA low
         if_low  i2c,scl
             goto wait_for_start
-        ; START sequence complete
+        ; START sequence complete.
+
+	; The timing at this point is between 2 and 4 instruction cycles
+	; after the falling edge of SDA.
+	; SCL may still be high;
+	; in the worst timing case, SCL went low 0.34us ago
 
    endif
 
@@ -305,10 +310,10 @@ start_seen_SDA          ; We've seen SDA high
 ; about it, we do address-matching on each bit as they are received.
 ; This lets us react at 100kHz instead of 15kHz.
 
-; Read an data bit from the I2C stream and compare it against the "bit"th
-; bit in the given slave address. If it doesn't match, jump to "on_mismatch"
+; match-address macro:
+; Reads a data bit from the I2C stream and compares it against the "bit"th
+; bit in the given slave address. If it doesn't match, go wait for another start.
 ; While matching, this takes 2 instruction cycles after the clock goes high.
-
 
 match_address_bit    macro    addr, bit
         wait_for_low   i2c,scl
@@ -382,7 +387,7 @@ our_address = 0x7C		; The first of our four 8-bit slave addresses
 	
 	; Commands to receive data from i2c and do something with it
 	if_high  is_lcd_data,0
-	   goto  data_receive_routine
+	    goto  data_receive_routine
         goto  command_receive_routine
 
 i2c_read_commands

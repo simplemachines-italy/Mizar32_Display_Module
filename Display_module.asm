@@ -628,9 +628,10 @@ send_bit_scl_is_low
        clrf   time_out      ;try 256 times before declaring i2c time out
        rlf    i2c_data,f
        bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,sda            ;Prepare if C = 1
+       btfsc  STATUS, C            ;Test the carry bit
+       bsf    TRISB,sda            ;Output high (open collector) if C = 1
        btfss  STATUS, C            ;Test the carry bit
-       bcf    TRISB,sda            ;If C = 0
+       bcf    TRISB,sda            ;Output low if C = 0
        bsf    TRISB,scl            ;Release scl line
        bcf    STATUS,RP0           ;select bank 0
 

@@ -594,7 +594,7 @@ up_button_not_held
 send_switch_to_i2c   
 
        movwf  i2c_data
-       call   send_bit_scl_is_low  
+       call   i2c_send_byte
        goto   uscita_interrupt
 
 read_busy_flag                     ;0xF3
@@ -607,85 +607,44 @@ here1
 
 ;--------------------------------------
 
-waiting_for_send
+; i2c_send_byte subroutine: send a byte of data to the master.
+;
+; The byte is in register i2c_data and the clock is already held low
+; after the acknowledge bit we sent for our slave address.
+; I2C data is transmitted with the most significant bit first.
 
-       clrf   time_out      ;try 256 times before declaring i2c time out
+i2c_send_byte
 
-waiting_for_first_send
+send_another_bit
 
-       btfss  i2c,scl       ;First scl down?
-       goto   send_bit      ;True
-
-       decf   time_out,f    ;time_out reached?
-       btfss  STATUS,Z
-       goto   waiting_for_first_send
-       goto   i2c_error
-
-send_bit
-
-       ; clock stretching
-       bsf    STATUS,RP0    ;select bank 1
-       bcf    TRISB,scl     ;Hold low scl line
-       bcf    STATUS,RP0    ;select bank 0
-
-send_bit_scl_is_low
-
-       clrf   time_out      ;try 256 times before declaring i2c time out
-
+       ; output a bit
        bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,sda            ; Go open-collector for high output
-       btfss  i2c_data,7           ; see if data bit to output is 0
+       btfsc  i2c_data,7           ; See if data bit to output is 1
+       bsf    TRISB,sda            ; Go open-collector for high output if so
+       btfss  i2c_data,7           ; See if data bit to output is 0
        bcf    TRISB,sda            ; Output low if so
        bsf    TRISB,scl            ; Release the SCL line
        bcf    STATUS,RP0           ;select bank 0
 
+       wait_for_high  i2c,scl
+       wait_for_low   i2c,scl
+
+       ; hold the clock again
+       bsf    STATUS,RP0           ;select bank 1
+       bcf    TRISB,scl            ; Release the SCL line
+       bcf    STATUS,RP0           ;select bank 0
+
        rlf    i2c_data,f	   ; discard tha bit
        decfsz i2c_bit,f		   ; decrease bit count
-       goto   send_waiting_for_scl_up  ; if > 0, send another bit
-       goto   end_send_i2c	   ; if == 0, all 8 bits have been sent
-
-send_waiting_for_scl_up
-
-       btfsc  i2c,scl
-       goto   waiting_for_send
-
-       decfsz time_out,f    ;time_out reached?
-       goto   send_waiting_for_scl_up
-       goto   i2c_error
-
-end_send_i2c
-
-       clrf   time_out
-
-wait_for_end_i2c
-
-       btfsc  i2c,scl
-       goto   waiting_for_low_scl_again
-
-       decfsz time_out,f    ;time_out reached?
-       goto   wait_for_end_i2c
-       goto   i2c_error
-
-waiting_for_low_scl_again
-
-       btfss  i2c,scl
-       goto   release_sda_line
-
-       decfsz time_out,f    ;time_out reached?
-       goto   waiting_for_low_scl_again
-       goto   i2c_error
-
-release_sda_line
-
-       bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,sda     ;release SDA line
-       bcf    STATUS,RP0    ;select bank 0
-
-       movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit
+       goto   send_another_bit
 
        bcf    STATUS,C      ;communication ok
+
+       ; We only ever send one byte, so we don't care about the master's
+       ; ACK bit or its STOP condition or anything like that.
+
        return
+
 
 ;******************************************************************************
 ;Interrupt subroutines

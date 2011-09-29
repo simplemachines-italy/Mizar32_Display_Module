@@ -174,17 +174,6 @@ release    macro    addr,pin
     endm
 
 
-; Stretch the clock, and stop doing so.
-
-stretch    macro
-        drive_low i2c,scl
-    endm
-
-unstretch    macro
-        release   i2c,scl
-    endm
-
-
 ; In the I2C spec, the minimum time between SDA falling and SCL falling in a
 ; START is 4us, which is slightly longer that the maximum interrupt latency of
 ; 4 instruction cycles at 921600 ips.
@@ -318,16 +307,16 @@ start_seen_SDA          ; We've seen SDA high
 ; bit in the given slave address. If it doesn't match, go wait for another start.
 ; While matching, this takes 2 instruction cycles after the clock goes high.
 
-match_address_bit    macro    addr, bit
+match_address_bit    macro    addr,bit
         wait_for_low   i2c,scl
         wait_for_high  i2c,scl
         if (addr & (1 << bit))
-            ; continue if the bit is one
-            btfss   i2c,sda
+	    ; The bit should be high, so quit if sda is low
+            if_low   i2c,sda
         else
-            ; (addr & (1<<bit)) == 0, so sda should be zero too.
-            ; Continue if the bit is zero
-            btfsc   i2c,sda
+            ; (addr & (1<<bit)) == 0, so sda should be low.
+            ; Quit if it is high.
+            if_high   i2c,sda
         endif
      ifdef INTERRUPT
 	goto rti
@@ -374,30 +363,31 @@ match_address
         ; The top 6 bits of the slave address should match out address;
         ; These are followed by whether this is a command or data and
         ; whether it is an I2C read or write command.
-        match_address_bit  our_address, 7
-        match_address_bit  our_address, 6
-        match_address_bit  our_address, 5
-        match_address_bit  our_address, 4
-        match_address_bit  our_address, 3
-        match_address_bit  our_address, 2
+        match_address_bit  our_address,7
+        match_address_bit  our_address,6
+        match_address_bit  our_address,5
+        match_address_bit  our_address,4
+        match_address_bit  our_address,3
+        match_address_bit  our_address,2
         ; save the command/data bit of the slave address and the R/W flag
         roll_sda_into_lsb  command_is_lcd_data
         roll_sda_into_lsb  command_is_i2c_read
         send_acknowledge_and_stretch
 
 	; See whether we should read the I2C bus or write to it
-	if_high  command_is_i2c_read,0
-	    goto  i2c_read_commands
-	
-	; Commands to receive data from i2c and do something with it
-	if_high  command_is_lcd_data,0
-	    goto  data_receive_routine
-        goto  command_receive_routine
+	if_low  command_is_i2c_read,0
+	   goto  i2c_write_commands
 
 i2c_read_commands
 	if_high  command_is_lcd_data,0
 	   goto  request_switch_condition
         goto  read_busy_flag
+	
+i2c_write_commands
+	; Commands to receive data from i2c and do something with it
+	if_high  command_is_lcd_data,0
+	   goto  data_receive_routine
+        goto  command_receive_routine
 
    ifdef INTERRUPT
 

@@ -106,11 +106,11 @@ i2c_data             equ    0x13   ;Save location for i2c data byte.
 i2c_bit              equ    0x14   ;bit counter in i2c byte transfer
 nb_data              equ    0x15   ;Number of bytes read from I2C into buffer
                                    ;and number of bytes left to write to LCD
-is_lcd_data          equ    0x16   ; Bit 0 says whether this was an I2C command
-                                   ; messsage.  If 1, it is a data message;
-				   ; If 0 it is a command message
-is_i2c_read_command  equ    0x17   ; Bit 0 is the read/write bit that follows
-                                   ; the 7-bit slave address
+command_is_lcd_data  equ    0x16   ; Bit 0 says whether this was an I2C data
+                                   ; message.  If 1, it was a data message;
+				   ; If 0 it was a command message.
+command_is_i2c_read  equ    0x17   ; Bit 0 is the read/write bit that follows
+                                   ; the 7-bit slave address, 1 for read.
 start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
                                    ;buffer depth is 0x2c-0x4f, so we have 36
                                    ;bytes maximum (32 are used)
@@ -258,6 +258,8 @@ unstretch    macro
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
 
+       ; this is the time-critical branch which continues at match_address
+
    else
 
        org    0x0000
@@ -371,8 +373,9 @@ send_acknowledge_and_stretch    macro
         select_port_bank
    endm
 
-our_address = 0x7C		; The first of our four 8-bit slave addresses
+our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
+match_address
         ; The top 6 bits of the slave address should match out address;
         ; These are followed by whether this is a command or data and
         ; whether it is an I2C read or write command.
@@ -383,21 +386,21 @@ our_address = 0x7C		; The first of our four 8-bit slave addresses
         match_address_bit  our_address, 3
         match_address_bit  our_address, 2
         ; save the command/data bit of the slave address and the R/W flag
-        roll_sda_into_lsb  is_lcd_data
-        roll_sda_into_lsb  is_i2c_read_command
+        roll_sda_into_lsb  command_is_lcd_data
+        roll_sda_into_lsb  command_is_i2c_read
         send_acknowledge_and_stretch
 
 	; See whether we should read the I2C bus or write to it
-	if_high  is_i2c_read_command,0
+	if_high  command_is_i2c_read,0
 	    goto  i2c_read_commands
 	
 	; Commands to receive data from i2c and do something with it
-	if_high  is_lcd_data,0
+	if_high  command_is_lcd_data,0
 	    goto  data_receive_routine
         goto  command_receive_routine
 
 i2c_read_commands
-	if_high  is_lcd_data,0
+	if_high  command_is_lcd_data,0
 	   goto  request_switch_condition
         goto  read_busy_flag
 
@@ -418,8 +421,7 @@ uscita_interrupt
 rti			; fast exit, for when we have modified nothing
        bcf    INTCON,INTF
        retfie 
-   else
-       goto uscita_interrupt	; the main-program version of the same thing
+
    endif
 
 command_receive_routine                    ;0xF6 = Command

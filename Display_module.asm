@@ -88,7 +88,7 @@ button_DOWN   equ    16
 button_SELECT equ    32
 
 
-;Used PIC memory ORG 0x0C
+; PIC memory registers, from 0x0C
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
 DelayCounter         equ    0x0e   ;Two locations reserved for delay register
@@ -348,8 +348,8 @@ match_address_bit    macro    addr, bit
 roll_sda_into_lsb    macro    location
         wait_for_low  i2c,scl
         wait_for_high i2c,scl
-        rrf     i2c, w          ; roll SDA into C, throw away the rest
-        rlf     location, f     ; roll C into the bottom of the register
+        rrf     i2c,w           ; roll SDA into C, throw away the rest
+        rlf     location,f      ; roll C into the bottom of the register
     endm
 
 ; Send the acknowledgement and block the I2C bus while we process it.

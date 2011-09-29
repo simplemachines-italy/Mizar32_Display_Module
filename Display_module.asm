@@ -63,29 +63,24 @@ STRETCH_ON_SEND equ 1
 ; The TRIS bits, instead, can be set/cleared using bcf/bcf, since the value
 ; read from them always reflects the content that was last written to them.
 
-;LCD control lines on PORTB
+; I2C lines on PORTB
 
-LCD_RS          equ     2       ;Register Select on portb
-LCD_RW          equ     3       ;Read o write selection on portb
-LCD_E           equ     4       ;Lcd Enable on port portb
+i2c           equ    PORTB  ; Which port are the I2C lines on?
+sda           equ    0      ; PORTB bit 0 is SDA pin
+scl           equ    1      ; PORTB bit 1 is SCL pin
 
-;LCD data lines on PORTA
+; LCD control lines on PORTB
 
-LCD_DB4         equ     0       ;LCD data line DB4
-LCD_DB5         equ     1       ;LCD data line DB5
-LCD_DB6         equ     2       ;LCD data line DB6
-LCD_DB7         equ     3       ;LCD data line DB7
+LCD_RS        equ    2      ; Register Select (0 = command, 1 = data)
+LCD_RW        equ    3      ; Read or write to LCD (0 = write, 1 = read)
+LCD_E         equ    4      ; LCD Enable (pulse high for >230ns to activate)
 
-sda           equ    0      ;PortB bit 0 is sda pin
-scl           equ    1      ;PortB bit 1 is scl pin
-i2c           equ    PORTB  ; 
+; LCD data lines on PORTA
 
-; Bit values returned by the button-reading code
-button_LEFT   equ    2
-button_RIGHT  equ    4
-button_UP     equ    8
-button_DOWN   equ    16
-button_SELECT equ    32
+LCD_DB4       equ    0      ; LCD data line DB4 is PA0
+LCD_DB5       equ    1      ; LCD data line DB5 is PA1
+LCD_DB6       equ    2      ; LCD data line DB6 is PA2
+LCD_DB7       equ    3      ; LCD data line DB7 is PA3
 
 
 ; PIC memory registers, from 0x0C
@@ -276,10 +271,10 @@ uscita_interrupt
        movwf  i2c_bit
 
        ; Ensure that clock stretching is undone and that SDA is not held low
-       bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,sda            ;Release SDA line
-       bsf    TRISB,scl            ;Release SCL line
-       bcf    STATUS,RP0           ;select bank 0
+       select_tris_bank
+       bsf    i2c,sda              ;Release SDA line
+       bsf    i2c,scl              ;Release SCL line
+       select_port_bank
 
        ; and wait for another start condition
 
@@ -413,10 +408,10 @@ uscita_interrupt
        movwf  i2c_bit
 
        ; Release the SCL line, put low by send_ack
-       bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,sda            ;Release SDA line too
-       bsf    TRISB,scl            ;Release scl line
-       bcf    STATUS,RP0           ;select bank 0
+       select_tris_bank
+       bsf    i2c,sda              ;Release SDA line
+       bsf    i2c,scl              ;Release scl line
+       select_port_bank
 
 rti			; fast exit, for when we have modified nothing
        bcf    INTCON,INTF
@@ -509,15 +504,15 @@ send_istruction
 
 ; The buttons are connected as follows
 ;
-;          RB5
+;          RB5 (LU_port,LU_bit)
 ;          / \
 ;         L   U
 ;        /     \
-;      RA4     RB7
+;      RA4     RB7 (UD_port,UD_bit)
 ;        \     /
 ;         R   D
 ;          \ /
-;          RB6
+;          RB6 (RDS_port,RDS_bit)
 ;           |
 ;           S
 ;           |
@@ -525,7 +520,34 @@ send_istruction
 ;
 ; where R[AB]X are port pins and L R U D S are the buttons.
 ; There is a 10K pull-up resistor on the RB pins.
-;
+
+; Pin connected to LEFT and RIGHT
+LR_port       equ    PORTA
+LR_pin        equ    4
+#define       LR     LR_port,LR_pin
+
+; Pin connected to LEFT and UP
+LU_port       equ    PORTB
+LU_pin        equ    5
+#define       LU     LU_port,LU_pin
+
+; Pin connected to RIGHT, DOWN and SELECT
+RDS_port      equ    PORTB
+RDS_pin       equ    6
+#define       RDS    RDS_port,RDS_pin
+
+; Pin connected to UP and DOWN
+UD_port       equ    PORTB
+UD_pin        equ    7
+#define       UD     UD_port,UD_pin
+
+; Bit values returned by the button-reading code
+button_LEFT   equ    2
+button_RIGHT  equ    4
+button_UP     equ    8
+button_DOWN   equ    16
+button_SELECT equ    32
+
 ; SELECT is easy to test: set all pins as (high) inputs and test if RB6 is low.
 ;
 ; We can also detect any combination of two of L R U and D being held,
@@ -546,73 +568,76 @@ send_istruction
 ; since this short-circuits the fourth button at an electrical level,
 ; so it looks like all four buttons are held.
 
-request_switch_condition           ;0xF7
+; Speed is not an issue here, since all commands are executed with the
+; I2C clock line stretched.
+; If you're desperate for code size, you can optimize consecutive
+;    drive_low foo
+;    release   bar
+; sequences into
+;    select_tris_bank 
+;      bcf foo	; drive low
+;      bsf bar	; release
+;    select_port_bank
+
+request_switch_condition
 
        bcf    STATUS,RP0    ;Select bank of memory 0
        clrf   PORTB         ; Ensure all RB lines will output 0
        clrf   PORTA         ; Ensure RA4 will output 0.
 
-       ; TRIS bits should already be set with all four lines an inputs.
+       ; TRIS bits should already be set with all four lines as inputs.
 
        movlw    0   ; no buttons pressed yet...
 
        ; Check SELECT switch with all lines as inputs
-       btfss  PORTB,6
-       iorlw  button_SELECT
+       if_low  RDS           ; Is SELECT pressed?
+         iorlw button_SELECT ; yes
 
        ; Check RIGHT and DOWN by setting RB6 as a low output
-       bsf    STATUS,RP0 ; access tris
-       bcf    TRISB,6
-       bcf    STATUS,RP0 ; access ports
-       btfss  PORTA,4  ; RIGHT?
-       iorlw  button_RIGHT
-       btfss  PORTB,7 ; DOWN?
-       iorlw  button_DOWN
+       drive_low  RDS
+       if_low  LR            ; Is RIGHT pressed?
+         iorlw button_RIGHT  ; yes
+       if_low  UD            ; Is DOWN pressed?
+         iorlw button_DOWN   ; yes
+       release    RDS
 
        ; Check LEFT by setting RA4 as a low output and testing RB5
-       bsf    STATUS,RP0 ; access tris
-       bsf    TRISB,6         ; RB6 is an input again
-       bcf    TRISA,4         ; RA4 is a low output
-       bcf    STATUS,RP0 ; access ports
-       btfsc  PORTB,5        ; LEFT?
-       goto   left_button_not_held
-       ; now check the other way
-       bsf    STATUS,RP0 ; access tris
-       bsf    TRISA,4         ; RA4 is an input again
-       bcf    TRISB,5         ; RB5 is a low output
-       bcf    STATUS,RP0 ; access ports
-       btfss  PORTA,4        ; LEFT?
-       iorlw  button_LEFT
-left_button_not_held
+       drive_low  LR
+       if_high  LU           ; Is LEFT pressed?
+         goto  left_button_not_pressed ; no
+       ; now check the other way round
+       release  LR
+       drive_low  LU
+       if_low  LR            ; Is LEFT really pressed?
+         iorlw  button_LEFT  ; yes
+       release  LU
+left_button_not_pressed
+       release  LR
 
        ; Check UP by setting RB7 low and testing RB5
-       bsf    STATUS,RP0 ; access tris
-       bsf    TRISA,4         ; RA4 is an input again
-       bsf    TRISB,5         ; RB5 is an input again
-       bcf    TRISB,7         ; RB7 is a low output
-       bcf    STATUS,RP0 ; access ports
-       btfsc  PORTB,5        ; UP?
-       goto up_button_not_held
-       ; now check the other way
-       bsf    STATUS,RP0 ; access tris
-       bsf    TRISB,7         ; RB7 is an input again
-       bcf    TRISB,5         ; RB5 is a low output
-       bcf    STATUS,RP0 ; access ports
-       btfss  PORTB,7        ; UP?
-       iorlw  button_UP
-up_button_not_held
-
-       ; Set UP pins back to inputs
-       bsf    STATUS,RP0
-       bsf    TRISB,7
-       bsf    TRISB,5
-       bcf    STATUS,RP0
+       drive_low  UD
+       if_high  LU           ; Is UP pressed?
+         goto up_button_not_pressed ; no
+       release    UD
+       drive_low  LU
+       if_low  UD            ; Is UP really pressed?
+         iorlw  button_UP    ; yes
+       release    LU
+up_button_not_pressed
+       release  UD
 
 send_switch_to_i2c   
 
        movwf  i2c_data
        call   i2c_send_byte
        goto   uscita_interrupt
+
+;------------------------------------------------------------------
+; read_busy_flag: Read the DDRAM address and busy flag from the LCD
+; and send them as a byte to the I2C master.
+;------------------------------------------------------------------
+
+; Unimplemented
 
 read_busy_flag                     ;0xF3
 
@@ -640,37 +665,36 @@ i2c_send_byte
    ifdef STRETCH_ON_SEND
 
    ; This version stretches the low half of the clock on every clock pulse
-   ; The critical times is from releasing the clock to holding it again,
+   ;
+   ; The critical time is from releasing the clock to holding it again,
    ; If the clock goes high when released, this happens 125ns after the end
    ; of the "bsf scl" insn. We detect that it is high within 2 insns (2us),
    ; which is 2.17us, well within the the minimum of 4us.
    ;
-   ; We then have to hold the clock low within 4.7us of the clock going low.
-   ; For this, the worst case is when we sample the last moment of the high part
-   ; of the clock. It then takes us 3 insn cycles to sample it again, and
-   ;   bsf scl; nop; bsf RP0; bcf scl;
-   ; to get it low again, which is
+   ; We then have to hold the clock low within 4.7us of the master driving it
+   ; low.  The worst case is when we sample the last moment of the high part
+   ; of the clock waveform and it takes us 3 insn cycles to sample it again
+   ; and
+   ;   btfsx scl; nop; bsf RP0; bcf scl;
+   ; to hold it low, which is
    ; 6.75 * 1.085us + 125ns = 7.45us, much longer than the ~ 4.7us we have.
    ; (I can't find a figure to say what the setup time is for a clock stretch)
 
 send_another_bit
 
        ; output a bit
-       bsf    STATUS,RP0           ;select bank 1
+       select_tris_bank
        btfsc  i2c_data,7           ; See if data bit to output is 1
-       bsf    TRISB,sda            ; Go open-collector for high output if so
+       bsf    i2c,sda              ; Go open-collector for high output if so
        btfss  i2c_data,7           ; See if data bit to output is 0
-       bcf    TRISB,sda            ; Output low if so
-       bsf    TRISB,scl            ; Release the SCL line
-       bcf    STATUS,RP0           ;select bank 0
+       bcf    i2c,sda              ; Output low if so
+       bsf    i2c,scl              ; Release the clock
+       select_port_bank
 
        wait_for_high  i2c,scl
        wait_for_low   i2c,scl
 
-       ; hold the clock again
-       bsf    STATUS,RP0           ;select bank 1
-       bcf    TRISB,scl            ; Hold the SCL line again
-       bcf    STATUS,RP0           ;select bank 0
+       drive_low  i2c,scl          ; hold the clock again
 
        rlf    i2c_data,f	   ; discard tha bit
        decfsz i2c_bit,f		   ; decrease bit count
@@ -678,40 +702,38 @@ send_another_bit
 
    else
 
-   ; This version just runs as fast as it can, hoping to keep up with the clock.
+   ; This version runs as fast as it can, hoping to keep up with the clock.
    ; The critical time is from detecting SCL low to getting SDA high or low.
    ; SCL is sampled on the falling edge of the first Fosc clock pulse of the
    ; first insn of wait_for_low, so the delay is:
    ;   3/4 of btfsx (high SDA); goto taken (2 insn cycles); btfsx (low SDA);
    ;   nop(goto); bsf STATUS; bsf TRISB; btfss i2c_data; bcf TRISB
    ; and the output is valid 125ns after the first rising edge of the next insn.
-   ; Total delay is 8.75*1.085us + 125ns = 9.62us,  which is twice the maximum 
-   ; of t(LOW)- t(SU:DAT) = 4.7us - 250ns = 4.45us.
-  
+   ; The maximum allowed delay is t(LOW)- t(SU:DAT) = 4.7us - 250ns = 4.45us.
+   ; Total delay here is 8.75*1.085us + 125ns = 9.62us  - twice the spec :-(
 
        ; The first bit is different because we have to release SCL when we
-       ; have set the right value on SDA.  For the other 7 bits we just run
-       ; as fast as we can. This takes 6 or 7 instructions maximum from
-       ; detecting SCL low to getting the data on SDA.
+       ; have set the data value on SDA.  For the other 7 bits we just run
+       ; as fast as we can.
 
        ; output bit 7
-       bsf    STATUS,RP0           ;select bank 1
+       select_tris_bank
        btfsc  i2c_data,7           ; See if data bit to output is 1
-       bsf    TRISB,sda            ; Go open-collector for high output if so
+       bsf    i2c,sda              ; Go open-collector for high output if so
        btfss  i2c_data,7           ; See if data bit to output is 0
-       bcf    TRISB,sda            ; Output low if so
-       bsf    TRISB,scl            ; Release the SCL line
-       bcf    STATUS,RP0           ;select bank 0
+       bcf    i2c,sda              ; Output low if so
+       bsf    i2c,scl              ; Release the SCL line
+       select_port_bank
        
        wait_for_high  i2c,scl
        wait_for_low   i2c,scl
 
 i2c_send_bit    macro   bit        
-       bsf    STATUS,RP0           ;select bank 1
-       bsf    TRISB,sda            ; Go open-collector for high output
+       select_tris_bank
+       bsf    i2c,sda              ; Go open-collector for high output
        btfss  i2c_data,bit         ; See if data bit to output is 0
-       bcf    TRISB,sda            ; Output low if so
-       bcf    STATUS,RP0           ;select bank 0
+       bcf    i2c,sda              ; Output low if so
+       select_port_bank
        wait_for_high  i2c,scl
        wait_for_low   i2c,scl
    endm
@@ -725,16 +747,15 @@ i2c_send_bit    macro   bit
        i2c_send_bit 0
        
        ; hold the clock again
-       bsf    STATUS,RP0           ;select bank 1
-       bcf    TRISB,scl            ; Hold the SCL line again
-       bcf    STATUS,RP0           ;select bank 0
+       drive_low    i2c,scl        ; Stretch the clock line again
 
    endif
 
        bcf    STATUS,C      ;communication ok
 
        ; We only ever send one byte, so we don't care about the master's
-       ; ACK bit or its STOP condition or anything like that.
+       ; ACK bit or its STOP condition or anything else.
+       ; We just go and wait for another START condition.
 
        return
 

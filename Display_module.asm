@@ -496,6 +496,15 @@ send_istruction
        goto   send_istruction
        goto   uscita_interrupt
 
+
+;-------------------------------------------------------------------------------
+; request_switch_condition subroutine
+; reads the buttons and sends their current status to the I2C master as a byte
+; with the bottom 5 bits each set or clear, depending whether each button is
+; held.  This works for up to two of the L R U D buttons with or without Select
+; while three of the four held reports all four held.
+;-------------------------------------------------------------------------------
+
 ; The buttons are connected as follows
 ;
 ;          RB5

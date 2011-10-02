@@ -15,6 +15,8 @@
                 __CONFIG        0x3FF1
 
 
+; Conditional compilation flags
+
 ; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
@@ -27,12 +29,14 @@
 
 STRETCH_ON_SEND equ 1
 
+
+; Configuration options
+
 ; We use four 8-bit slave addresses, to read and write commands and data.
 ; 7C: Write I2C data from master to LCD
 ; 7D: Read command, replies with the RAM address and busy flag register.
 ; 7E: Write I2C commands from master to LCD
 ; 7F: Read the buttons and return byte whose bits say which ones are pressed
-
 
 our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
@@ -831,7 +835,7 @@ init_interrupt
 ; Delay routines
 ;**********************************************************************
 
-; msDelay: Delay for W mmilliseconds
+; msDelay: Delay for W milliseconds
 
 ; Fosc = 3.6864MHz; instruction time = 4 clock cycles => 921600 instructions/sec
 ; 1ms = 921.6 insns = 921.6/4 inner loops = 230.4 iterations.
@@ -856,6 +860,7 @@ msDelayLoop2
 
        return
 
+
 ; Delay for 39 microseconds.
 
 Delay39us
@@ -874,6 +879,7 @@ Delay39usLoop
 
 
 ; Delay for 43 microseconds.
+
 Delay43us
        ; 921600 * 0.000043 = 39.6288 instructions.
        ; Each loop iteration takes 3 cycles and the calling overhead is
@@ -892,6 +898,7 @@ Delay43usLoop
 ; Delay for 1.53 milliseconds.
 ; 921600 * 0.00153 = 1410.048 insns
 ; 1410/6 = 235.0, with overhead of 6 cycles, we use 234
+
 Delay1_53ms
        movlw  .234
        movwf  DelayCounter

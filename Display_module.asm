@@ -640,7 +640,7 @@ left_button_not_pressed
 up_button_not_pressed
        release  UD
 
-send_switch_to_i2c   
+send_data_to_i2c   
 
        movwf  i2c_data
        call   i2c_send_byte
@@ -653,8 +653,8 @@ send_switch_to_i2c
 
 read_busy_flag
 
-       ; Unimplemented
-       goto   uscita_interrupt
+       call   LcdReadAddress
+       goto   send_data_to_i2c
 
 
 ;******************************************************************************
@@ -1022,6 +1022,45 @@ LcdSendByte
               clrf   PORTB
 
               return
+
+;**********************************************************************
+; Read the RAM address pointer and busy flag into W
+;**********************************************************************
+
+LcdReadAddress
+              bcf    PORTB,LCD_RS       ; RS = 0
+              bsf    PORTB,LCD_RW       ; R/W = 1
+
+              ; Make our four data lines inputs
+              select_tris_bank
+              movlw  11111111B
+              movwf  TRISA
+              select_port_bank
+
+              ; raise the strobe so that the LCD's data lines become outputs
+              bsf    PORTB,LCD_E
+              swapf  PORTA,w            ; Fetch the top four bits
+              andlw  11110000B
+              movwf  tmpLcdRegister
+              bcf    PORTB,LCD_E        ; lower the strobe
+
+              bsf    PORTB,LCD_E
+              movf   PORTA,w            ; Fetch the bottom four bits
+              andlw  00001111B
+              iorwf  tmpLcdRegister,f
+
+              clrf   PORTB              ; lower the strobe and reset the
+                                        ; bits scrambled by b[cs]f PORTB
+
+              select_tris_bank
+              movlw  11110000B          ; Set our data lines back to outputs
+              movwf  TRISA
+              select_port_bank
+
+              movf   tmpLcdRegister,w   ; put the return value in W
+
+              return
+
 
 ;**********************************************************************
 ;Soubroutines End here

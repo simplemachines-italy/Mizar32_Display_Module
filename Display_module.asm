@@ -1,5 +1,5 @@
 ;***********************************************************
-;it_ Program created by Antonio Cingolani for Simplemachines
+; Program created by Antonio Cingolani for Simplemachines
 ; for the Display module of the Mizr32 project
 ;
 ; Based on Display_module_beta_1.3.asm V. 1.1,
@@ -216,7 +216,7 @@ release    macro    addr,pin
     ifdef INTERRUPT
 
        org    0x0000   ; Main program
-       
+
        call   initialize
        call   init_interrupt
        goto   $                ; do nothing forever
@@ -391,7 +391,7 @@ i2c_read_commands
 ;                     _____
 ;       SDA ///X_____|4.7us
 ; STOP:          __________
-;	SCL ____|4us      
+;	SCL ____|4us
 ;
 ;               ______
 ;       SDA ///X 4.7us|______X///
@@ -494,7 +494,7 @@ process_i2c_byte
 
    ifdef INTERRUPT
 
-uscita_interrupt                          
+uscita_interrupt
 
        ; Release the SCL line, put low by send_ack
        select_tris_bank
@@ -504,7 +504,7 @@ uscita_interrupt
 
 rti			; fast exit, for when we have modified nothing
        bcf    INTCON,INTF
-       retfie 
+       retfie
 
    endif
 
@@ -589,7 +589,7 @@ button_DOWN   equ    16
 ;    drive_low foo
 ;    release   bar
 ; sequences into
-;    select_tris_bank 
+;    select_tris_bank
 ;      bcf foo	; drive low
 ;      bsf bar	; release
 ;    select_port_bank
@@ -640,7 +640,7 @@ left_button_not_pressed
 up_button_not_pressed
        release  UD
 
-send_data_to_i2c   
+send_data_to_i2c
 
        movwf  i2c_data
        call   i2c_send_byte
@@ -737,11 +737,11 @@ send_another_bit
        bcf    i2c,sda              ; Output low if so
        bsf    i2c,scl              ; Release the SCL line
        select_port_bank
-       
+
        wait_for_high  i2c,scl
        wait_for_low   i2c,scl
 
-i2c_send_bit    macro   bit        
+i2c_send_bit    macro   bit
        select_tris_bank
        bsf    i2c,sda              ; Go open-collector for high output
        btfss  i2c_data,bit         ; See if data bit to output is 0
@@ -750,7 +750,7 @@ i2c_send_bit    macro   bit
        wait_for_high  i2c,scl
        wait_for_low   i2c,scl
    endm
-       
+
        i2c_send_bit 6
        i2c_send_bit 5
        i2c_send_bit 4
@@ -758,7 +758,7 @@ i2c_send_bit    macro   bit
        i2c_send_bit 2
        i2c_send_bit 1
        i2c_send_bit 0
-       
+
        ; hold the clock again
        drive_low    i2c,scl        ; Stretch the clock line again
 
@@ -785,7 +785,7 @@ initialize
                             ;for switch function
 ;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 ;      movlw  0x1C          ;Rb7, RB6 and RB5 must be low when in out mode
-                            ;LCD line (E, R/W, RS) must be High.SDA and SCL must 
+                            ;LCD line (E, R/W, RS) must be High.SDA and SCL must
                             ;be low when in out mode
 ;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 
@@ -794,7 +794,7 @@ initialize
        movwf  PORTB         ;For init PortB
 
        select_tris_bank
-       movlw  00010000B     ;Config port A all output - RA4 input for switch 
+       movlw  00010000B     ;Config port A all output - RA4 input for switch
        movwf  TRISA         ;
 
        movlw  11100011B     ;RB6 and RB5 for input switch. RB7 out for switch
@@ -865,7 +865,7 @@ Delay39us
 Delay39usLoop
        decfsz DelayCounter,f       ; 1 cycle
        goto   Delay39usLoop        ; 2 cycles
-              
+
        return
 
 
@@ -881,7 +881,7 @@ Delay43us
 Delay43usLoop
        decfsz DelayCounter,f       ; 1 cycle
        goto   Delay43usLoop        ; 2 cycles
-              
+
        return
 
 
@@ -896,9 +896,9 @@ Delay1_53usLoop
        nop                         ; 1 cycle
        decfsz DelayCounter,f         ; 1 cycle
        goto   Delay1_53usLoop      ; 2 cycles
-              
+
        return
-              
+
 
 ;**********************************************************************
 ; Initialize the LCD display
@@ -1063,7 +1063,7 @@ LcdReadAddress
 
 
 ;**********************************************************************
-;Soubroutines End here
+;Subroutines End here
 ;**********************************************************************
 
               END

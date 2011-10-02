@@ -557,11 +557,11 @@ UD_pin        equ    7
 #define       UD     UD_port,UD_pin
 
 ; Bit values returned by the button-reading code
+button_SELECT equ    1
 button_LEFT   equ    2
 button_RIGHT  equ    4
 button_UP     equ    8
 button_DOWN   equ    16
-button_SELECT equ    32
 
 ; SELECT is easy to test: set all pins as (high) inputs and test if RB6 is low.
 ;

@@ -1,5 +1,5 @@
 ;***********************************************************
-; Program created by Antonio Cingolani for Simplemachines
+;it_ Program created by Antonio Cingolani for Simplemachines
 ; for the Display module of the Mizr32 project
 ;
 ; Based on Display_module_beta_1.3.asm V. 1.1,
@@ -87,28 +87,16 @@ LCD_DB7       equ    3      ; LCD data line DB7 is PA3
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
 DelayCounter         equ    0x0e   ;Two locations reserved for delay register
-time_out             equ    0x11   ;Counter register for time out i2c communications
 
-flag                 equ    0x12   ;Register used for flag bit allocation
-;Bits in flag register:
-istr_lcd             equ    3      ;0 = instruction to send to display
-data_lcd             equ    3      ;1 = data to send to dislpay
-intflag              equ    4      ;0 = no interrupt occurred
-                                   ;1 = an interrupt occurred
 ;------------------------------------------------------------------------------------------|
 
-i2c_data             equ    0x13   ;Save location for i2c data byte.
-i2c_bit              equ    0x14   ;bit counter in i2c byte transfer
-nb_data              equ    0x15   ;Number of bytes read from I2C into buffer
-                                   ;and number of bytes left to write to LCD
+i2c_data             equ    0x13   ; Save location for i2c data byte
+i2c_bit              equ    0x14   ; Bit counter in i2c byte transfer
 command_is_lcd_data  equ    0x16   ; Bit 0 says whether this was an I2C data
                                    ; message.  If 1, it was a data message;
 				   ; If 0 it was a command message.
 command_is_i2c_read  equ    0x17   ; Bit 0 is the read/write bit that follows
                                    ; the 7-bit slave address, 1 for read.
-start_buffer         equ    0x2c   ;Start of buffer for i2c communication.
-                                   ;buffer depth is 0x2c-0x4f, so we have 36
-                                   ;bytes maximum (32 are used)
 
 ;*******************************************************************************
 ; Macros to make code more readable
@@ -242,22 +230,20 @@ release    macro    addr,pin
        btfss  PORTB,scl
        goto   uscita_interrupt            ;If no start condition go out
 
-       ; this is the time-critical branch which continues at match_address
+       ; this is the time-critical branch, which continues at match_address
 
    else
 
        org    0x0000
 
        call   initialize
-       goto   wait_for_start
+       ;goto   wait_for_start
+	
 
 ; In the version without an interrupt routine, instead of leaving the
 ; interrupt routine, we come back here, reinitialise and wait for a START.
 
 uscita_interrupt
-       ; Reset the dirtied variables
-       movlw  0x08
-       movwf  i2c_bit
 
        ; Ensure that clock stretching is undone and that SDA is not held low
        select_tris_bank
@@ -283,12 +269,14 @@ wait_for_start
 start_seen_SDA          ; We've seen SDA high
         if_low  i2c,scl
             goto wait_for_start
-                        ; We've seen SDA high, SCL high
+        ; We've seen SDA high, SCL high
         if_high i2c,sda
             goto start_seen_SDA
-                        ; We've seen SDA high, SCL high, SDA low
+        ; We've seen SDA high, SCL high, SDA low
         if_low  i2c,scl
             goto wait_for_start
+        ; We've seen SDA high, SCL high, SDA low, SCL high
+
         ; START sequence complete.
 
 	; The timing at this point is between 2 and 4 instruction cycles
@@ -344,7 +332,7 @@ roll_sda_into_lsb    macro    location
 ;
 ; There is some slack time here.
 
-send_acknowledge_and_stretch    macro
+send_ack_and_stretch    macro
         wait_for_low  i2c,scl
         drive_low     i2c,sda
         wait_for_high i2c,scl
@@ -372,7 +360,7 @@ match_address
         ; save the command/data bit of the slave address and the R/W flag
         roll_sda_into_lsb  command_is_lcd_data
         roll_sda_into_lsb  command_is_i2c_read
-        send_acknowledge_and_stretch
+        send_ack_and_stretch
 
 	; See whether we should read the I2C bus or write to it
 	if_low  command_is_i2c_read,0
@@ -382,20 +370,131 @@ i2c_read_commands
 	if_high  command_is_lcd_data,0
 	   goto  request_switch_condition
         goto  read_busy_flag
-	
+
+
+;******************************************************************************
+; i2c_write_commands routine:
+; Receive data from the I2C master and do something with it.
+;******************************************************************************
+
+; The clock is currently stretched in the low period following an ACK and
+; the slave address said that the master wants to send us some data.
+; One of three things can happen when we unstretch the clock:
+; - we get the first bit of an 8-bit data byte
+; - we get a STOP condition
+; - we get a repeated START condition
+;               ______
+;       SDA ///X______X///
+; DATA:          ____
+;	SCL ____|4us |____
+;
+;                     _____
+;       SDA ///X_____|4.7us
+; STOP:          __________
+;	SCL ____|4us      
+;
+;               ______
+;       SDA ///X 4.7us|______X///
+; START:         ___________
+;	SCL ____|       4us |____
+;
+; The figures are the minimum possible times according to the I2C spec.
+;
+; To detect these three cases, we actually use four branches,
+; with separate code for data-0 and for data-1.
+;
+; This version just runs as fast as possible without stretching the clock on
+; every bit, and hopes to be fast enough.  Optimization may follow...
+;
+; Since every command or data consist of a single byte, we just receive
+; one byte, stop the clock, act on that byte, then start the clock again
+; for the next byte.
+; If we get a STOP condition instead, we go back to waiting for a START,
+; and if we get a repeated START, we jump into the start-detection code
+; at the appropriate point.
+
 i2c_write_commands
-	; Commands to receive data from i2c and do something with it
+
+	release  i2c,scl
+	wait_for_high  i2c,scl
+	if_high  i2c,sda
+	  goto data_1_or_restart
+
+data_0_or_stop
+	if_high  i2c,scl
+	  goto data_0_or_stop_part_2
+
+data_0
+	; It's a data byte with bit 7 == 0
+	bcf  i2c_data,0                 ; D7
+	roll_sda_into_lsb i2c_data	; D6
+	roll_sda_into_lsb i2c_data	; D5
+	roll_sda_into_lsb i2c_data	; D4
+	roll_sda_into_lsb i2c_data	; D3
+	roll_sda_into_lsb i2c_data	; D2
+	roll_sda_into_lsb i2c_data	; D1
+	roll_sda_into_lsb i2c_data	; D0
+	send_ack_and_stretch
+	goto process_i2c_byte
+
+data_0_or_stop_part_2
+	if_low i2c,sda	       ; STOP condition?
+	  goto data_0_or_stop  ; no
+	; If SDA goes low at the same time as SCL goes high, this looks like
+	; a STOP condition. Check that SCL is still high fr a real STOP
+        if_low i2c,scl
+          goto data_0
+	goto uscita_interrupt  ; STOP condition detected.
+
+data_1_or_restart
+	if_high  i2c,scl
+	  goto data_1_or_restart_part_2
+
+data_1
+	; It's a data byte with bit 7 == 1
+	bsf  i2c_data,0                 ; D7
+	roll_sda_into_lsb i2c_data	; D6
+	roll_sda_into_lsb i2c_data	; D5
+	roll_sda_into_lsb i2c_data	; D4
+	roll_sda_into_lsb i2c_data	; D3
+	roll_sda_into_lsb i2c_data	; D2
+	roll_sda_into_lsb i2c_data	; D1
+	roll_sda_into_lsb i2c_data	; D0
+	send_ack_and_stretch
+	goto process_i2c_byte
+
+data_1_or_restart_part_2
+	if_high  i2c,sda
+	  goto data_1_or_restart
+	; If SDA goes low at the same time as SCL goes high, this looks like
+	; a START condition. Check that SCL is still high to check for real
+	; restart.
+        if_low i2c,scl
+          goto data_1
+	; It's a restart
+	goto match_address
+
+process_i2c_byte
+	; We have received a data/command byte. Process it.
+	movf   i2c_data,w
 	if_high  command_is_lcd_data,0
-	   goto  data_receive_routine
-        goto  command_receive_routine
+	   call  LcdSendData
+	if_low   command_is_lcd_data,0
+	   call  LcdSendCommand
+
+        ; That's all. Go and see if there is another byte of data for us.
+	goto i2c_write_commands
+
+
+;******************************************************************************
+; uscita_interrupt routine (in INTERRUPT mode only)
+; Either the I2C message is complete or something went wrong.
+; Clean up and get out.
+;******************************************************************************
 
    ifdef INTERRUPT
 
 uscita_interrupt                          
-
-       ; reinitialize the static variables
-       movlw  8
-       movwf  i2c_bit
 
        ; Release the SCL line, put low by send_ack
        select_tris_bank
@@ -409,88 +508,14 @@ rti			; fast exit, for when we have modified nothing
 
    endif
 
-command_receive_routine                    ;0xF6 = Command
 
-       bcf    flag,istr_lcd
-       goto   receive_and_store
-
-data_receive_routine                       ;0xF2 = Data
-
-       bsf    flag,istr_lcd
-
-receive_and_store
-
-       movlw  start_buffer  ;Init FSR register for indirect addressing
-       movwf  FSR           ;for storage of i2c data received
-       clrf   nb_data       ;No bytes have been received yet...
-
-       call   start_bit_ok_but_scl_low
-
-       btfsc  STATUS,C             ;error on i2c communication?
-       goto   uscita_interrupt     ;yes
-       
-       movf   i2c_data,w
-       movwf  INDF
-       incf   FSR,f
-
-receive_again_and_store
-
-       incf   nb_data,f
-       btfsc  nb_data,5            ;32 byte already received?
-       goto   memory_full          ;yes
-
-       call   send_ack_without_clk_down
-       call   start_bit_ok
-
-       btfsc  STATUS,C             ;error on i2c communication?
-       goto   maybe_stop           ;yes
-
-       movf   i2c_data,w
-       movwf  INDF
-       incf   FSR,f
-       goto   receive_again_and_store
-
-memory_full
-
-       decf   nb_data,f     ;last increment was wrong so decrement nb_data
-
-maybe_stop
-;XXXXinserire controllo di stop guardando il numero di bit ricevuto
-
-       movlw  start_buffer         ;Init FSR register for indirect addressing
-       movwf  FSR                  ;for read i2c data received
-
-       btfss  flag,istr_lcd        ;data or istruction?
-       goto   send_istruction
-
-send_data
-
-       movf   INDF,w
-       incf   FSR,f
-
-       call   LcdSendData
-       decfsz nb_data,f
-       goto   send_data
-       goto   uscita_interrupt
-
-send_istruction
-
-       movf   INDF,w
-       incf   FSR,f
-
-       call   LcdSendCommand
-       decfsz nb_data,f
-       goto   send_istruction
-       goto   uscita_interrupt
-
-
-;-------------------------------------------------------------------------------
+;******************************************************************************
 ; request_switch_condition subroutine
 ; reads the buttons and sends their current status to the I2C master as a byte
 ; with the bottom 5 bits each set or clear, depending whether each button is
 ; held.  This works for up to two of the L R U D buttons with or without Select
 ; while three of the four held reports all four held.
-;-------------------------------------------------------------------------------
+;******************************************************************************
 
 ; The buttons are connected as follows
 ;
@@ -571,7 +596,6 @@ button_SELECT equ    32
 
 request_switch_condition
 
-       bcf    STATUS,RP0    ;Select bank of memory 0
        clrf   PORTB         ; Ensure all RB lines will output 0
        clrf   PORTA         ; Ensure RA4 will output 0.
 
@@ -622,28 +646,24 @@ send_switch_to_i2c
        call   i2c_send_byte
        goto   uscita_interrupt
 
-;------------------------------------------------------------------
+;******************************************************************************
 ; read_busy_flag: Read the DDRAM address and busy flag from the LCD
 ; and send them as a byte to the I2C master.
-;------------------------------------------------------------------
+;******************************************************************************
 
-; Unimplemented
+read_busy_flag
 
-read_busy_flag                     ;0xF3
-
-       call   send_ack
-here1
-       goto   here1
+       ; Unimplemented
        goto   uscita_interrupt
 
 
-;--------------------------------------
-
+;******************************************************************************
 ; i2c_send_byte subroutine: send a byte of data to the master.
 ;
 ; The byte is in register i2c_data and the clock is already held low
 ; after the acknowledge bit we sent for our slave address.
 ; I2C data is transmitted with the most significant bit first.
+;******************************************************************************
 
 i2c_send_byte
 
@@ -669,6 +689,9 @@ i2c_send_byte
    ; to hold it low, which is
    ; 6.75 * 1.085us + 125ns = 7.45us, much longer than the ~ 4.7us we have.
    ; (I can't find a figure to say what the setup time is for a clock stretch)
+
+       movlw  0x08          ;init bit counter for i2c communication
+       movwf  i2c_bit
 
 send_another_bit
 
@@ -741,177 +764,12 @@ i2c_send_bit    macro   bit
 
    endif
 
-       bcf    STATUS,C      ;communication ok
-
        ; We only ever send one byte, so we don't care about the master's
        ; ACK bit or its STOP condition or anything else.
        ; We just go and wait for another START condition.
 
        return
 
-
-;******************************************************************************
-;Interrupt subroutines
-;******************************************************************************
-start_bit_ok_but_scl_low
-
-       bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,scl     ;release scl line
-       bcf    STATUS,RP0    ;select bank 0
-
-start_bit_ok
-;If start condition is true than execute this code
-
-       clrf   time_out      ;try 256 time before declaring i2c time out
-
-waiting_for_scl_down
-
-       btfss  i2c,scl       ;First scl down true?
-       goto   first_scl_down
-
-       decfsz time_out,f    ;time_out reached?
-       goto   waiting_for_scl_down
-       goto   i2c_error
-
-first_scl_down
-
-       clrf   time_out      ;try 256 times before declaring i2c time out
-       
-waiting_for_scl_up
-
-       btfsc  i2c,scl
-       goto   looking_for_sda_value
-
-       decfsz time_out,f    ;time_out reached?
-       goto   waiting_for_scl_up
-       goto   i2c_error
-
-looking_for_sda_value
-
-       ; SDA is bit 0 of PORTB, so just roll it in via the carry flag.
-       rrf    i2c,w         ;put bit 0 into C
-       rlf    i2c_data,f    ;put C into bit 0
-       decfsz i2c_bit,f
-       goto   start_bit_ok
-
-i2c_communication_ok
-
-       movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit
-       bcf    STATUS,C             ;communication ok
-       return
-
-i2c_error
-
-       movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit
-       bsf    STATUS,C
-       return
-
-send_ack_without_clk_down
-
-       clrf   time_out
-
-recheck_scl_pin1
-
-       btfsc  i2c,scl       ;sda pin must be written when scl = 0
-       goto   check_time_out12
-
-       bsf    STATUS,RP0    ;select bank 1
-       bcf    TRISB,sda     ;send ack
-       bcf    STATUS,RP0    ;select bank 0
-       
-       clrf   time_out
-
-recheck_scl_pin_11
-
-       btfss  i2c,scl
-       goto   check_time_out11                   
-
-       clrf   time_out
-
-recheck_scl_pin_21
-
-       btfsc  i2c,scl       ;if scl=0 the ack bit is sent
-       goto   check_time_out21
-
-       bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,sda     ;set pin sda as input
-       bcf    STATUS,RP0    ;select bank 0
-
-       bcf    STATUS,C      ; no error
-       return
-
-check_time_out12
-
-       decfsz time_out,f
-       goto   recheck_scl_pin1
-       goto   i2c_error     
-
-check_time_out11
-
-       decfsz time_out,f
-       goto   recheck_scl_pin_11
-       goto   i2c_error     
-
-check_time_out21
-
-       decfsz time_out,f
-       goto   recheck_scl_pin_21
-       goto   i2c_error     
-
-send_ack
-
-       clrf   time_out
-       
-recheck_scl_pin
-
-       btfsc  i2c,scl       ;sda pin must be wrote when scl = 0
-       goto   check_time_out
-
-       bsf    STATUS,RP0    ;select bank 1
-       bcf    TRISB,sda     ;send ack
-       bcf    STATUS,RP0    ;select bank 0
-       
-       clrf   time_out
-
-recheck_scl_pin_1
-
-       btfss  i2c,scl
-       goto   check_time_out1                    
-
-       clrf   time_out
-
-recheck_scl_pin_2
-
-       btfsc  i2c,scl       ;if scl=0 the ack bit is sent
-       goto   check_time_out2
-
-       bsf    STATUS,RP0    ;select bank 1
-       bsf    TRISB,sda     ;set pin sda as input
-       bcf    TRISB,scl     ;scl as output for clock stretching
-       bcf    STATUS,RP0    ;select bank 0
-
-       bcf    STATUS,C      ; no error
-       return
-
-check_time_out
-
-       decfsz time_out,f
-       goto   recheck_scl_pin
-       goto   i2c_error     
-
-check_time_out1
-
-       decfsz time_out,f
-       goto   recheck_scl_pin_1
-       goto   i2c_error     
-
-check_time_out2
-
-       decfsz time_out,f
-       goto   recheck_scl_pin_2
-       goto   i2c_error     
 
 ;******************************************************************************
 ;******************************************************************************
@@ -935,22 +793,19 @@ initialize
                             ;LCD line (E, R/W, RS) must be High.
        movwf  PORTB         ;For init PortB
 
-       bsf    STATUS,RP0    ;Select bank of memory 1
+       select_tris_bank
        movlw  00010000B     ;Config port A all output - RA4 input for switch 
        movwf  TRISA         ;
 
        movlw  11100011B     ;RB6 and RB5 for input switch. RB7 out for switch
        movwf  TRISB         ;Rb1= Scl (input) Rb0=Sda (input)
-       bcf    STATUS,RP0    ;Select bank of memory 0
+       select_port_bank
 
        call   LcdInit       ;Init LCD
-       call   LcdClear      ;and clear
 
        ; Pre-initialize the registers used in the interrupt routine
        ; so that it can respond more quickly
 
-       movlw  0x08          ;init bit counter for i2c communication
-       movwf  i2c_bit
 
        return
 
@@ -1083,7 +938,6 @@ LcdInit
               EN_STROBE
               call    Delay39us
 
-;--------------------------------
 
               movlw   00000010B
               movwf   PORTA
@@ -1112,38 +966,6 @@ LcdInit
               call    LcdSendCommand
 
               ; LcdSendCommand has cleared PORTB for us.
-
-              return
-
-
-;**********************************************************************
-; Clear LCD
-;**********************************************************************
-
-LcdClear
-              movlw   0x01
-              goto    LcdSendCommand    ; tail call
-
-;**********************************************************************
-; Locate cursor on LCD
-; W = D7-D4 row, D3-D0 col
-;**********************************************************************
-
-LcdLocate
-              movwf   tmpLcdRegister+0
-
-              movlw   0x80
-              movwf   tmpLcdRegister+1
-
-              movf    tmpLcdRegister+0,W
-              andlw   0x0F
-              iorwf   tmpLcdRegister+1,F
-
-              btfsc   tmpLcdRegister+0,4
-              bsf     tmpLcdRegister+1,6
-
-              movf    tmpLcdRegister+1,W
-              call    LcdSendCommand
 
               return
 
@@ -1204,6 +1026,5 @@ LcdSendByte
 ;**********************************************************************
 ;Soubroutines End here
 ;**********************************************************************
-
 
               END

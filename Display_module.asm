@@ -12,7 +12,7 @@
                 RADIX           DEC
                 INCLUDE         "p16f84.inc"
                 ERRORLEVEL      -302
-                                                        __CONFIG        0x3FF1
+                __CONFIG        0x3FF1
 
 
 ; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
@@ -22,10 +22,19 @@
 ;INTERRUPT equ 1
 
 ; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
-; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher I2C
-; clock rates at present.
+; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher
+; I2C clock rates at present.
 
 STRETCH_ON_SEND equ 1
+
+; We use four 8-bit slave addresses, to read and write commands and data.
+; 7C: Write I2C data from master to LCD
+; 7D: Read command, replies with the RAM address and busy flag register.
+; 7E: Write I2C commands from master to LCD
+; 7F: Read the buttons and return byte whose bits say which ones are pressed
+
+
+our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
 
 ; The bits of the I/O ports are assigned as follows:
@@ -87,15 +96,12 @@ LCD_DB7       equ    3      ; LCD data line DB7 is PA3
 
 tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
 DelayCounter         equ    0x0e   ;Two locations reserved for delay register
-
-;------------------------------------------------------------------------------------------|
-
-i2c_data             equ    0x13   ; Save location for i2c data byte
-i2c_bit              equ    0x14   ; Bit counter in i2c byte transfer
-command_is_lcd_data  equ    0x16   ; Bit 0 says whether this was an I2C data
+i2c_data             equ    0x10   ; Save location for i2c data byte
+i2c_bit              equ    0x11   ; Bit counter in i2c byte transfer
+command_is_lcd_data  equ    0x12   ; Bit 0 says whether this was an I2C data
                                    ; message.  If 1, it was a data message;
 				   ; If 0 it was a command message.
-command_is_i2c_read  equ    0x17   ; Bit 0 is the read/write bit that follows
+command_is_i2c_read  equ    0x13   ; Bit 0 is the read/write bit that follows
                                    ; the 7-bit slave address, 1 for read.
 
 ;*******************************************************************************
@@ -344,8 +350,6 @@ send_ack_and_stretch    macro
         bsf     i2c,sda		; release SDA
         select_port_bank
    endm
-
-our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
 match_address
         ; The top 6 bits of the slave address should match out address;

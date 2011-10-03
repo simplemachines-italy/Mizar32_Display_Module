@@ -21,7 +21,7 @@
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
 
-;INTERRUPT equ 1
+INTERRUPT equ 1
 
 ; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
 ; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher
@@ -228,7 +228,6 @@ release    macro    addr,pin
        org    0x0000   ; Main program
 
        call   initialize
-       call   init_interrupt
        goto   $                ; do nothing forever
 
 
@@ -787,6 +786,9 @@ i2c_send_bit    macro   bit
 
 initialize
 
+       select_port_bank
+       bcf    INTCON,GIE           ;Disable global interrupt
+
        movlw  0xEF
        movwf  PORTA         ;Init PortA all out and all High for correct
                             ;start LCD. Only RA4 must be low when in out mode
@@ -811,21 +813,18 @@ initialize
 
        call   LcdInit       ;Init LCD
 
-       return
-
-
-;**********************************************************************
-;Soubroutines Start here
-;**********************************************************************
-init_interrupt
-
+   ifdef INTERRUPT
        bsf    STATUS,RP0           ;Select bank of memory 1
        bcf    OPTION_REG,INTEDG    ;Select INT interrupt on falling edge
-       bcf    INTCON,INTF
+       bcf    INTCON,INTF	   ;Clear the interrupt if it is active
        bcf    STATUS,RP0           ;Select bank of memory 0
        bsf    INTCON,INTE          ;Enable INT interrupt
        bsf    INTCON,GIE           ;Enable global interrupt
+       bcf    INTCON,INTF
+   endif
+
        return
+
 
 ;**********************************************************************
 ; Delay routines
@@ -980,7 +979,7 @@ LcdSendCommand
 	      ; Our fake command 0 does a complete initialization of the LCD
 	      addlw   0
               btfsc   STATUS,Z
-	      goto    LcdInit
+	      goto    initialize
 
               bcf    PORTB,LCD_RS
               call   LcdSendByte   ; LcdSendByte clears PORTB for us.

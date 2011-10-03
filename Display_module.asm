@@ -451,7 +451,11 @@ data_0_or_stop_part_2
 	; a STOP condition. Check that SCL is still high for a real STOP
         if_low i2c,scl
           goto data_0
+   ifdef INTERRUPT
 	goto uscita_interrupt  ; STOP condition detected.
+   else
+        goto wait_for_start
+   endif
 
 data_1_or_restart
 	if_high  i2c,scl

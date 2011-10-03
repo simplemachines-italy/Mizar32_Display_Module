@@ -17,12 +17,6 @@
 
 ; Conditional compilation flags
 
-; if INTERRUPT is defined, we run as as SDA falling edge-triggered interrupt
-; routine with the main program doing nothing.  If it is undefined, we run
-; everything in the main routine with no interrupts.
-
-;INTERRUPT equ 1
-
 ; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
 ; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher
 ; I2C clock rates at present.
@@ -176,34 +170,9 @@ release    macro    addr,pin
 ; START is 4us, which is slightly longer that the maximum interrupt latency of
 ; 4 instruction cycles at 921600 ips.
 ;
-; There are several options to get the best performance:
+; We do everything in a main loop and busy-wait to detect the START condition
 ;
-; Option 1)
-; Do everything in an interrupt routine triggered by falling SDA edge.
-;
-; We can check SCL in the first instruction of the interrupt routine.
-; The pin is sampled on the rising edge of the second oscillator cycle
-; of that instruction, which results in a maximum latency from SDA down
-; to checking SCL is high of 4 insns * 4 Tosc + Tosc = 17/3686400 seconds
-; which is 4.6115 us. This is outside the standard-speed I2C spec of 4us.
-; It also reacts to every SDA high-low transition in the data and generates
-; a lot of false STARTs because it only checks that SCL is high after the
-; falling edge of SDA, not that both SDA and SCL were high in the preceding
-; 4.7us.  There are almost certainly data sequences for other devices that
-; will match any addresses we may choose to use.
-;
-; One way to make this work within the I2C spec is to resign ourselves to not
-; always seeing the SCL high condition, and also allow an immediate SCL low,
-; which would be in the low clock period preceding the first data bit. This
-; extends the possible interrupt latency to 8.7us, which is OK for us.
-; However, this is even more prone to detecting false START conditions in
-; other devices' data.
-;
-; Option 2)
-; Do everything in a main loop and busy-wait to detect the START condition
-;
-; There are two ways to sample SDA and SCL.
-; The one with the highest sampling rate is to sample each one alternately
+; The fastest way to sample SDA and SCL is to sample each one alternately
 ; using a sequence of btfsc-goto pairs.  If the matching sequence for a
 ; START is a linear sequence of code, not taking the branches, this samples
 ; one pin every 2 instructions. At 3.686Mhz we have 921600 ips, each insn
@@ -219,30 +188,6 @@ release    macro    addr,pin
 ; Main code section starts
 ;******************************************************************************
 
-; In interrupt mode, the main program just initializes then loops forever
-; and all work is doen in the SDA falling edge interrupt routine.
-; In non-interrupt mode we busy-wait for the START condition, do stuff and loop.
-
-    ifdef INTERRUPT
-
-       org    0x0000   ; Main program
-
-       call   initialize
-       goto   $                ; do nothing forever
-
-
-       org    0x0004   ; Interrupt routine
-
-       ; If we are here, sda pin has gone low. Look for scl pin;
-       ; If scl=1 a start condition is TRUE
-
-       btfss  PORTB,scl
-       goto   uscita_interrupt            ;If no start condition go out
-
-       ; this is the time-critical branch, which continues at match_address
-
-   else
-
        org    0x0000
 
        call   initialize
@@ -252,7 +197,7 @@ release    macro    addr,pin
 ; In the version without an interrupt routine, instead of leaving the
 ; interrupt routine, we come back here and wait for a START.
 
-uscita_interrupt
+unstretch_and_wait_for_start
 
        ; Ensure that clock stretching is undone and that SDA is not held low
        select_tris_bank
@@ -293,7 +238,6 @@ start_seen_SDA          ; We've seen SDA high
 	; SCL may still be high;
 	; in the worst timing case, SCL went low 0.34us ago
 
-   endif
 
 ; After a start bit, instead of reading a bytes of slave address and thinking
 ; about it, we do address-matching on each bit as they are received.
@@ -451,11 +395,7 @@ data_0_or_stop_part_2
 	; a STOP condition. Check that SCL is still high for a real STOP
         if_low i2c,scl
           goto data_0
-   ifdef INTERRUPT
-	goto uscita_interrupt  ; STOP condition detected.
-   else
         goto wait_for_start
-   endif
 
 data_1_or_restart
 	if_high  i2c,scl
@@ -495,29 +435,6 @@ process_i2c_byte
 
         ; That's all. Go and see if there is another byte of data for us.
 	goto i2c_write_commands
-
-
-;******************************************************************************
-; uscita_interrupt routine (in INTERRUPT mode only)
-; Either the I2C message is complete or something went wrong.
-; Clean up and get out.
-;******************************************************************************
-
-   ifdef INTERRUPT
-
-uscita_interrupt
-
-       ; Release the SCL line, put low by send_ack
-       select_tris_bank
-       bsf    i2c,sda              ;Release SDA line
-       bsf    i2c,scl              ;Release scl line
-       select_port_bank
-
-rti			; fast exit, for when we have modified nothing
-       bcf    INTCON,INTF
-       retfie
-
-   endif
 
 
 ;******************************************************************************
@@ -655,7 +572,7 @@ send_data_to_i2c
 
        movwf  i2c_data
        call   i2c_send_byte
-       goto   uscita_interrupt
+       goto   unstretch_and_wait_for_start
 
 ;******************************************************************************
 ; read_busy_flag: Read the DDRAM address and busy flag from the LCD
@@ -700,6 +617,8 @@ i2c_send_byte
    ; to hold it low, which is
    ; 6.75 * 1.085us + 125ns = 7.45us, much longer than the ~ 4.7us we have.
    ; (I can't find a figure to say what the setup time is for a clock stretch)
+   ;
+   ; This version works with an I2C clock rate of 91kHz or less.
 
        movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit

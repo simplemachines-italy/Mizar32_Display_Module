@@ -21,7 +21,7 @@
 ; routine with the main program doing nothing.  If it is undefined, we run
 ; everything in the main routine with no interrupts.
 
-INTERRUPT equ 1
+;INTERRUPT equ 1
 
 ; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
 ; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher
@@ -219,7 +219,7 @@ release    macro    addr,pin
 ; Main code section starts
 ;******************************************************************************
 
-; In interrupt mode, the main program just initialises then loops forever
+; In interrupt mode, the main program just initializes then loops forever
 ; and all work is doen in the SDA falling edge interrupt routine.
 ; In non-interrupt mode we busy-wait for the START condition, do stuff and loop.
 
@@ -250,7 +250,7 @@ release    macro    addr,pin
 	
 
 ; In the version without an interrupt routine, instead of leaving the
-; interrupt routine, we come back here, reinitialise and wait for a START.
+; interrupt routine, we come back here and wait for a START.
 
 uscita_interrupt
 
@@ -448,7 +448,7 @@ data_0_or_stop_part_2
 	if_low i2c,sda	       ; STOP condition?
 	  goto data_0_or_stop  ; no
 	; If SDA goes low at the same time as SCL goes high, this looks like
-	; a STOP condition. Check that SCL is still high fr a real STOP
+	; a STOP condition. Check that SCL is still high for a real STOP
         if_low i2c,scl
           goto data_0
 	goto uscita_interrupt  ; STOP condition detected.
@@ -789,26 +789,23 @@ initialize
        select_port_bank
        bcf    INTCON,GIE           ;Disable global interrupt
 
-       movlw  0xEF
-       movwf  PORTA         ;Init PortA all out and all High for correct
-                            ;start LCD. Only RA4 must be low when in out mode
-                            ;for switch function
-;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
-;      movlw  0x1C          ;Rb7, RB6 and RB5 must be low when in out mode
-                            ;LCD line (E, R/W, RS) must be High.SDA and SCL must
-                            ;be low when in out mode
-;XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+       movlw  11101111B
+       movwf  PORTA         ;Init all LCD control lines High for correct LCD start
+			    ;Only RA4 must be low when in out mode for switch function
 
-       movlw  0x1F          ;Rb7, RB6 and RB5 must be low when in out mode
+       movlw  00011100B     ;RB7, RB6 and RB5 must be low when in out mode
                             ;LCD line (E, R/W, RS) must be High.
+			    ; SDA and SCL are always low when outputs
        movwf  PORTB         ;For init PortB
 
        select_tris_bank
-       movlw  00010000B     ;Config port A all output - RA4 input for switch
-       movwf  TRISA         ;
+
+       movlw  11110000B     ;Config LCD data lines all output - RA4 input for switch
+       movwf  TRISA
 
        movlw  11100011B     ;RB6 and RB5 for input switch. RB7 out for switch
-       movwf  TRISB         ;Rb1= Scl (input) Rb0=Sda (input)
+       movwf  TRISB         ;Rb1=Scl (input) Rb0=Sda (input)
+
        select_port_bank
 
        call   LcdInit       ;Init LCD
@@ -816,14 +813,41 @@ initialize
    ifdef INTERRUPT
        bsf    STATUS,RP0           ;Select bank of memory 1
        bcf    OPTION_REG,INTEDG    ;Select INT interrupt on falling edge
-       bcf    INTCON,INTF	   ;Clear the interrupt if it is active
        bcf    STATUS,RP0           ;Select bank of memory 0
-       bsf    INTCON,INTE          ;Enable INT interrupt
-       bsf    INTCON,GIE           ;Enable global interrupt
-       bcf    INTCON,INTF
+       ;bsf    INTCON,INTE          ;Enable INT interrupt
+       ;bcf    INTCON,INTF          ;Clear the interrupt if it is active
+       ;bsf    INTCON,GIE           ;Enable global interrupt
+       movlw  (1<<INTE) | (1<<GIE) | (0<<INTF) ; equivalent
+       movwf  INTCON
    endif
 
        return
+
+; This is the same, except that it is called from an RESET command,
+; so the PIC is in a known state (port bank selected, SCL held low)
+; and it must not release the SCL line.
+reinitialize
+       movlw  11101111B
+       movwf  PORTA         ;Init all LCD control lines High for correct LCD start
+			    ;Only RA4 must be low when in out mode for switch function
+
+       movlw  00011100B     ;RB7, RB6 and RB5 must be low when in out mode
+                            ;LCD line (E, R/W, RS) must be High.
+			    ; SDA and SCL are always low when outputs
+       movwf  PORTB         ;For init PortB
+
+       select_tris_bank
+
+       movlw  11110000B     ;Config LCD data lines all output - RA4 input for switch
+       movwf  TRISA
+
+       movlw  11100001B     ;RB6 and RB5 for input switch. RB7 out for switch
+       movwf  TRISB         ;Rb1=Scl (held low) Rb0=Sda (input)
+
+       select_port_bank
+
+       goto   LcdInit       ;Init LCD (tail call)
+
 
 
 ;**********************************************************************
@@ -979,7 +1003,7 @@ LcdSendCommand
 	      ; Our fake command 0 does a complete initialization of the LCD
 	      addlw   0
               btfsc   STATUS,Z
-	      goto    initialize
+	      goto    reinitialize ; tail call
 
               bcf    PORTB,LCD_RS
               call   LcdSendByte   ; LcdSendByte clears PORTB for us.

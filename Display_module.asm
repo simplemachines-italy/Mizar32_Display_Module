@@ -1,9 +1,9 @@
 ;***********************************************************
 ; Program created by Antonio Cingolani for Simplemachines
-; for the Display module of the Mizr32 project
+; for the Display module of the Mizar32 project
+; hacked by Martin Guy
 ;
-; Based on Display_module_beta_1.3.asm V. 1.1,
-; hacked by Martin Guy in Septempber 2011
+; Display_module.asm v1.6, 3 Oct 2011
 ;
 ; The Pic 16f84 clock crystal runs at 3,68 Mhz
 ;************************************************************
@@ -13,15 +13,6 @@
                 INCLUDE         "p16f84.inc"
                 ERRORLEVEL      -302
                 __CONFIG        0x3FF1
-
-
-; Conditional compilation flags
-
-; if STRETCH_ON_SEND is defined, we do clock stretching at a bit-level
-; when sending data onto the I2C bus.  STRETCH_ON_SEND can handle higher
-; I2C clock rates at present.
-
-STRETCH_ON_SEND equ 1
 
 
 ; Configuration options
@@ -34,6 +25,8 @@ STRETCH_ON_SEND equ 1
 
 our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
+
+; Hardware definitions
 
 ; The bits of the I/O ports are assigned as follows:
 ; PORTA
@@ -92,8 +85,8 @@ LCD_DB7       equ    3      ; LCD data line DB7 is PA3
 
 ; PIC memory registers, from 0x0C
 
-tmpLcdRegister       equ    0x0c   ;Two locations reserved for LCD register
-DelayCounter         equ    0x0e   ;Two locations reserved for delay register
+tmpLcdRegister       equ    0x0c   ; One location reserved for LCD register
+DelayCounter         equ    0x0e   ; Two locations reserved for delay register
 i2c_data             equ    0x10   ; Save location for i2c data byte
 i2c_bit              equ    0x11   ; Bit counter in i2c byte transfer
 command_is_lcd_data  equ    0x12   ; Bit 0 says whether this was an I2C data
@@ -103,7 +96,7 @@ command_is_i2c_read  equ    0x13   ; Bit 0 is the read/write bit that follows
                                    ; the 7-bit slave address, 1 for read.
 
 ;*******************************************************************************
-; Macros to make code more readable
+; Nice macros
 ;*******************************************************************************
 
 ; An abbreviation for labels that are local to a macro definition
@@ -132,7 +125,7 @@ if_high   macro    addr,pin
     endm
 
 
-; Loop until a pin (sda/scl) is high/low
+; Loop until a pin of some register is high/low
 
 ; Loop until a pin is high
 wait_for_high    macro    addr,pin
@@ -191,7 +184,7 @@ release    macro    addr,pin
        org    0x0000
 
        call   initialize
-       ;goto   wait_for_start
+       goto   wait_for_start
 	
 
 ; In the version without an interrupt routine, instead of leaving the
@@ -208,10 +201,13 @@ unstretch_and_wait_for_start
        ; and wait for another start condition
 
 wait_for_start
-        ; SCL will always be high for 4.7us before a start condition
-        ; so we could also check for SCL being high before SDA here,
+        ; SCL is always high for 4.7us before a start condition so
+        ; we could also check for SCL being high before SDA here,
         ; assuming we always come back here at least 2us before every start
-        ; condition.
+        ; condition. However, the most time-critical part is from when we see
+        ; a STOP condition while waiting for the MSB of the next byte,
+        ; to when we get back here in time to catch the following START, and
+        ; with a scl-high check, the max clock rate is reduced from 54kHz to 48.
 
 	; Sampling SCL and SDA alternately, we look to match the sequence:
 	; { SDA-hi then SCL-hi } one or more times
@@ -219,7 +215,7 @@ wait_for_start
 	; followed by SCL-high
 
         if_low  i2c,sda
-            goto wait_for_start
+            goto $-1
 start_seen_SDA          ; We've seen SDA high
         if_low  i2c,scl
             goto wait_for_start
@@ -447,15 +443,15 @@ process_i2c_byte
 
 ; The buttons are connected as follows
 ;
-;          RB5 (LU_port,LU_bit)
+;          RB5 (LU)
 ;          / \
 ;         L   U
 ;        /     \
-;      RA4     RB7 (UD_port,UD_bit)
+; (LR) RA4     RB7 (UD)
 ;        \     /
 ;         R   D
 ;          \ /
-;          RB6 (RDS_port,RDS_bit)
+;          RB6 (RDS)
 ;           |
 ;           S
 ;           |
@@ -595,14 +591,7 @@ read_busy_flag
 
 i2c_send_byte
 
-   ; We have two algorithms for sending data. One stretches the clock at
-   ; every bit; the other just runs as fast as it can.
-   ; Neither succeeds in respecting the I2C spec for a 100kHz system,
-   ; but the clock-stretching one is more successful.
-
-   ifdef STRETCH_ON_SEND
-
-   ; This version stretches the low half of the clock on every clock pulse
+   ; This stretches the low half of the clock on every clock pulse
    ;
    ; The critical time is from releasing the clock to holding it again,
    ; If the clock goes high when released, this happens 125ns after the end
@@ -619,6 +608,9 @@ i2c_send_byte
    ; (I can't find a figure to say what the setup time is for a clock stretch)
    ;
    ; This version works with an I2C clock rate of 91kHz or less.
+   ; I tried a version that just ran as fast as it could without stretching the clock
+   ; but that only worked up to 71kHz was 58 bytes larger.
+
 
        movlw  0x08          ;init bit counter for i2c communication
        movwf  i2c_bit
@@ -642,57 +634,6 @@ send_another_bit
        rlf    i2c_data,f	   ; discard tha bit
        decfsz i2c_bit,f		   ; decrease bit count
        goto   send_another_bit
-
-   else
-
-   ; This version runs as fast as it can, hoping to keep up with the clock.
-   ; The critical time is from detecting SCL low to getting SDA high or low.
-   ; SCL is sampled on the falling edge of the first Fosc clock pulse of the
-   ; first insn of wait_for_low, so the delay is:
-   ;   3/4 of btfsx (high SDA); goto taken (2 insn cycles); btfsx (low SDA);
-   ;   nop(goto); bsf STATUS; bsf TRISB; btfss i2c_data; bcf TRISB
-   ; and the output is valid 125ns after the first rising edge of the next insn.
-   ; The maximum allowed delay is t(LOW)- t(SU:DAT) = 4.7us - 250ns = 4.45us.
-   ; Total delay here is 8.75*1.085us + 125ns = 9.62us  - twice the spec :-(
-
-       ; The first bit is different because we have to release SCL when we
-       ; have set the data value on SDA.  For the other 7 bits we just run
-       ; as fast as we can.
-
-       ; output bit 7
-       select_tris_bank
-       btfsc  i2c_data,7           ; See if data bit to output is 1
-       bsf    i2c,sda              ; Go open-collector for high output if so
-       btfss  i2c_data,7           ; See if data bit to output is 0
-       bcf    i2c,sda              ; Output low if so
-       bsf    i2c,scl              ; Release the SCL line
-       select_port_bank
-
-       wait_for_high  i2c,scl
-       wait_for_low   i2c,scl
-
-i2c_send_bit    macro   bit
-       select_tris_bank
-       bsf    i2c,sda              ; Go open-collector for high output
-       btfss  i2c_data,bit         ; See if data bit to output is 0
-       bcf    i2c,sda              ; Output low if so
-       select_port_bank
-       wait_for_high  i2c,scl
-       wait_for_low   i2c,scl
-   endm
-
-       i2c_send_bit 6
-       i2c_send_bit 5
-       i2c_send_bit 4
-       i2c_send_bit 3
-       i2c_send_bit 2
-       i2c_send_bit 1
-       i2c_send_bit 0
-
-       ; hold the clock again
-       drive_low    i2c,scl        ; Stretch the clock line again
-
-   endif
 
        ; We only ever send one byte, so we don't care about the master's
        ; ACK bit or its STOP condition or anything else.

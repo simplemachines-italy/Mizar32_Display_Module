@@ -811,10 +811,6 @@ initialize
 
        call   LcdInit       ;Init LCD
 
-       ; Pre-initialize the registers used in the interrupt routine
-       ; so that it can respond more quickly
-
-
        return
 
 
@@ -949,7 +945,6 @@ LcdInit
               EN_STROBE
               call    Delay39us
 
-
               movlw   00000010B
               movwf   PORTA
 
@@ -957,22 +952,18 @@ LcdInit
               call    Delay39us
 
               ;Configure the data bus to 4 bits
-
               movlw   0x28
               call    LcdSendCommand
 
               ;Entry mode set, increment, no shift
-
               movlw   0x06
               call    LcdSendCommand
 
               ;Display ON, Curson OFF, Blink OFF
-
               movlw   0x0C
               call    LcdSendCommand
 
               ; Clear display
-
               movlw   0x01
               call    LcdSendCommand
 
@@ -986,6 +977,10 @@ LcdInit
 ;**********************************************************************
 
 LcdSendCommand
+	      ; Our fake command 0 does a complete initialization of the LCD
+	      addlw   0
+              btfsc   STATUS,Z
+	      goto    LcdInit
 
               bcf    PORTB,LCD_RS
               call   LcdSendByte   ; LcdSendByte clears PORTB for us.

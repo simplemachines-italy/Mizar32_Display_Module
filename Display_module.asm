@@ -794,11 +794,11 @@ Delay43usLoop
 Delay1_53ms
        movlw  .234
        movwf  DelayCounter
-Delay1_53usLoop
+Delay1_53msLoop
        goto   $+1                  ; 2 cycles
        nop                         ; 1 cycle
        decfsz DelayCounter,f         ; 1 cycle
-       goto   Delay1_53usLoop      ; 2 cycles
+       goto   Delay1_53msLoop      ; 2 cycles
 
        return
 

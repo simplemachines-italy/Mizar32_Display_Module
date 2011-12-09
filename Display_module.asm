@@ -5,7 +5,12 @@
 ;
 ; Display_module.asm v1.6, 3 Oct 2011
 ;
-; The Pic 16f84 clock crystal runs at 3,68 Mhz
+; The Pic 16F84 clock crystal runs at 3,68 Mhz and performs 920000
+; instruction cycles per second, or one instruction cycle every 1.087 usec.
+;
+; For the LCD panel see http://home.comet.bg/datasheets/LCD/AC-162B.pdf
+; and http://embeddedtutorial.com/2010/01/interfacing-lcd-with-8051/
+; The LCD panel is powered with 5V (this affects its timing characteristics).
 ;************************************************************
 
                 PROCESSOR       16F84
@@ -672,6 +677,10 @@ initialize
 
        select_port_bank
 
+       ;Power-on delay of 3ms for LCD panel
+       movlw   3
+       call    msDelay
+
        call   LcdInit       ;Init LCD
 
    ifdef INTERRUPT
@@ -799,10 +808,12 @@ Delay1_53usLoop
 ; This function must be called before any other function that drives the LCD
 ;**********************************************************************
 
-; First, a nice macro to initiate the read/write from/to the LCD.
+; First, a nice macro to actuate the read/write from/to the LCD.
 ; As it uses bcf/bsf, it does a read-modify-write of PORTB, which changes
 ; the output pin value of any pins set as inputs to their current input voltage.
 ; Make sure PORTB is cleared before returning from routines that use EN_STROBE.
+; At 5V, the minimum strobe high time is 230ns, whereas b[cs]f take 1 cycle
+; which is just over 1 us.
 
 EN_STROBE            MACRO
                 bsf  PORTB,LCD_E
@@ -815,39 +826,57 @@ LcdInit
               ;bcf     PORTB,LCD_RW    ;Enable writing mode to the LCD
               clrf    PORTB           ;equivalent
 
-              movlw   30
-              call    msDelay
-
               ; Send the reset sequence to the LCD
+	      ; The Sequence recommended in the Ampire Datasheet sometimes
+	      ; leaves the display crashed. This sequence is taken from
+	      ; http://embeddedtutorial.com/2010/01/interfacing-lcd-with-8051/
+	      ; and seems to be reliable.
+
+	      ; First, some jiggery-pokery to set it to 8-bit mode,
+	      ; whether it was in 8-bit mode, 4-bit mode or 4-bit mode
+	      ; with one half of a command already sent.
 
               movlw   00000011B
               movwf   PORTA
+              EN_STROBE
+
+              movlw   50
+              call    msDelay
 
               EN_STROBE
-              call    Delay39us
+
+              movlw   10
+              call    msDelay
 
               EN_STROBE
-              call    Delay39us
 
-              EN_STROBE
-              call    Delay39us
+              movlw   1
+              call    msDelay
 
-              movlw   00000010B
-              movwf   PORTA
-
-              EN_STROBE
-              call    Delay39us
+              ;Now it is guaranteed to be in 8-bit mode
 
               ;Configure the data bus to 4 bits
+              movlw   00000010B
+              movwf   PORTA
+              EN_STROBE
+
+              movlw   50
+              call    msDelay
+
+              ;Set 2 display lines and 5x8 font
               movlw   0x28
               call    LcdSendCommand
 
-              ;Entry mode set, increment, no shift
-              movlw   0x06
+              ;Display OFF, Curson OFF, Blink OFF
+              movlw   0x0B
               call    LcdSendCommand
 
               ;Display ON, Curson OFF, Blink OFF
               movlw   0x0C
+              call    LcdSendCommand
+
+              ;Entry mode set, increment, no shift
+              movlw   0x06
               call    LcdSendCommand
 
               ; Clear display

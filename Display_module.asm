@@ -104,10 +104,6 @@ command_is_i2c_read  equ    0x13   ; Bit 0 is the read/write bit that follows
 ; Nice macros
 ;*******************************************************************************
 
-; An abbreviation for labels that are local to a macro definition
-#define L local
-
-
 ; PIC register bank selectors, to access the PORT or the TRIS registers.
 
 select_port_bank    macro
@@ -131,19 +127,19 @@ if_high   macro    addr,pin
 
 
 ; Loop until a pin of some register is high/low
+; Can't use local labels here cos MPLABIDE v.8.76 assembler barfs on them,
+; so we rely on knowing that if_low is one instruction.
 
 ; Loop until a pin is high
 wait_for_high    macro    addr,pin
- L loop = $
         if_low  addr,pin
-            goto loop
+            goto $-1
     endm
 
 ; Loop until a pin is low
 wait_for_low    macro    addr,pin
- L loop = $
         if_high  addr,pin
-            goto loop
+            goto $-1
     endm
 
 ; Set an open collector output to actively drive a low value.

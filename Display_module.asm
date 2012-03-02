@@ -30,6 +30,14 @@
 
 our_address equ 0x7C		; The first of our four 8-bit slave addresses
 
+; If you define INTERRUPT, this becomes an interrupt-driven routine which
+; detects the onset of a START condition by the falling edge of the data line.
+; This creates a lot of false-positive interrupts and overall is slower than
+; busy-wait sampling of the data and clock lines.  We leave the code in case
+; anyone is interested...
+
+; define INTERRUPT 1
+
 
 ; Hardware definitions
 
@@ -55,18 +63,19 @@ our_address equ 0x7C		; The first of our four 8-bit slave addresses
 ; X = any value
 ; OC = Open collector output: driven low or left as an input to float high
 ;
-; The OC pins must always have output value 0 and are switched using TRIS bits.
-; Attempts to set/clear bits in the ports using bcf/bsf are dangerous because
-; they do read-modify-write: if an OC bit is not driven at that moment and
-; is floating high, the bit read and written by bcf/bsf is the current input
-; value on that pin, which risks making it a high output when code switches it
-; to its low open-collector function.
+; The OC pins must always have output value 0 and are switched between
+; output-low and input-floats-high using bits of the TRIS (data direction)
+; register.
+; Attempts to set/clear bits in the ports' data bits using bcf/bsf are
+; dangerous because they do read-modify-write, so if an open-collector bit
+; is not driven at that moment and is floating high, the bit read and written
+; by bcf/bsf is the current input value on that pin, which risks making it
+; a high output when code switches it to its driven output function.
 ;
-; One option is always to set OC pins low before enabling them as outputs.
-; Another is to be sure only ever to write 0 into their PORT bits and never
-; use bcf/bsf on PORTs.
-; The TRIS bits, instead, can be set/cleared using bcf/bcf, since the value
-; read from them always reflects the content that was last written to them.
+; Out strategy here is that whenever a function sets/clears the logic values
+; of output PORTs, it must ensure it leaves them in "output low" state so that
+; our technique of flipping between output-low an input-floats-high continues
+; to work.
 
 ; I2C lines on PORTB
 
@@ -127,8 +136,8 @@ if_high   macro    addr,pin
 
 
 ; Loop until a pin of some register is high/low
-; Can't use local labels here cos MPLABIDE v.8.76 assembler barfs on them,
-; so we rely on knowing that if_low is one instruction.
+; We can't use local labels here cos MPLABIDE v.8.76 assembler barfs on them,
+; so we rely on knowing that if_low is one instruction and use goto $-1.
 
 ; Loop until a pin is high
 wait_for_high    macro    addr,pin
@@ -161,21 +170,21 @@ release    macro    addr,pin
 
 
 ; In the I2C spec, the minimum time between SDA falling and SCL falling in a
-; START is 4us, which is slightly longer that the maximum interrupt latency of
-; 4 instruction cycles at 921600 ips.
+; START condition is 4us, which is slightly longer that the maximum interrupt
+; latency of 4 instruction cycles at 921500 ips.
 ;
 ; We do everything in a main loop and busy-wait to detect the START condition
 ;
 ; The fastest way to sample SDA and SCL is to sample each one alternately
 ; using a sequence of btfsc-goto pairs.  If the matching sequence for a
 ; START is a linear sequence of code, not taking the branches, this samples
-; one pin every 2 instructions. At 3.686Mhz we have 921600 ips, each insn
+; one pin every 2 instructions. At 3.686Mhz we have 921500 ips, each insn
 ; takes 1.085us and our sampling rate is 2.17us.
 ; SDA is guaranteed high for 4.7us before it goes low and SCL is high for
 ; at least 4us after this, which guarantees us at least two samples in each
 ; of these intervals.
 ; If one of these states lasts longer than 4.7us, the looping branch
-; extends one of the 2-insn intervals to 3 insns.
+; extends one of the 2-insn intervals to 3 insns or 3.26us, still within 4.7us.
 
 
 ;******************************************************************************
@@ -725,8 +734,8 @@ reinitialize
 
 ; msDelay: Delay for W milliseconds
 
-; Fosc = 3.6864MHz; instruction time = 4 clock cycles => 921600 instructions/sec
-; 1ms = 921.6 insns = 921.6/4 inner loops = 230.4 iterations.
+; Fosc = 3.6864MHz; instruction time = 4 clock cycles => 921500 instructions/sec
+; 1ms = 921.5 insns = 921.5/4 inner loops = 230.4 iterations.
 ; An extra 4 cycles are taken by the outer loop re-initialization,
 ; giving a few cycles over 1ms per inner loop.
 
@@ -752,7 +761,7 @@ msDelayLoop2
 ; Delay for 39 microseconds.
 
 Delay39us
-       ; 921600 * 0.000039 = 35.9 instructions.
+       ; 921500 * 0.000039 = 35.9 instructions.
        ; Each loop iteration takes 3 cycles and the calling overhead is
        ; CALL (2), MOVLW(1), MOVWF(1), return(2) = 6 insns
        ; so we need to do (36-6)/3 = 10 iterations
@@ -769,7 +778,7 @@ Delay39usLoop
 ; Delay for 43 microseconds.
 
 Delay43us
-       ; 921600 * 0.000043 = 39.6288 instructions.
+       ; 921500 * 0.000043 = 39.6288 instructions.
        ; Each loop iteration takes 3 cycles and the calling overhead is
        ; CALL (2), NOP(1) MOVLW(1), MOVWF(1), return(2) = 7 insns.
        ; (40-7)/3 = 11
@@ -784,7 +793,7 @@ Delay43usLoop
 
 
 ; Delay for 1.53 milliseconds.
-; 921600 * 0.00153 = 1410.048 insns
+; 921500 * 0.00153 = 1410.048 insns
 ; 1410/6 = 235.0, with overhead of 6 cycles, we use 234
 
 Delay1_53ms

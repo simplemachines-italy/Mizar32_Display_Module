@@ -778,11 +778,10 @@ Delay39usLoop
 ; Delay for 43 microseconds.
 
 Delay43us
-       ; 921500 * 0.000043 = 39.6288 instructions.
+       ; 921500ips * 0.000043s = 41.3445 instructions.
        ; Each loop iteration takes 3 cycles and the calling overhead is
-       ; CALL (2), NOP(1) MOVLW(1), MOVWF(1), return(2) = 7 insns.
-       ; (40-7)/3 = 11
-       nop
+       ; CALL (2), MOVLW(1), MOVWF(1), return(2) = 6 insns.
+       ; (42-6)/3 = 11
        movlw  .11
        movwf  DelayCounter
 Delay43usLoop
